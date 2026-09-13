@@ -72,7 +72,7 @@
         </div>
 
         <div class="form-group">
-            <label for="profile_image">Update Profile Image (Avatar)</label>
+            <label for="profile_image_url">Profile Image (Avatar)</label>
             {% if contact['profile_image'] %}
             <div id="avatar-preview-container" style="margin-top: 10px;">
                 <p style="font-size: 0.8rem; color: var(--text-muted);">Current photo:</p>
@@ -86,20 +86,14 @@
                     style="width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 2px solid var(--primary-color);">
             </div>
             {% endif %}
-            <input type="file" id="profile_image" name="profile_image" accept=".jpg,.jpeg,.png">
+            <input type="url" id="profile_image_url" name="profile_image_url" autocomplete="off"
+                placeholder="Paste imgbb link here (HTML full linked or Direct link)"
+                value="{{ contact['profile_image'] if contact['profile_image'] and contact['profile_image'].startswith(('http://', 'https://')) else '' }}">
             <input type="hidden" name="cropped_image_base64" id="cropped_image_base64">
-            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 5px;">Leave empty to keep current photo.
-            </p>
-
-            <div
-                style="border-top: 1px dashed var(--border-color); margin-top: 1rem; padding-top: 1rem; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
-                <span style="font-size: 0.9rem; color: var(--text-muted);">OR use a free hosted photo
-                    (imgbb.com):</span>
-                <input type="url" id="profile_image_url" name="profile_image_url"
-                    placeholder="Paste imgbb link here (HTML full linked or Direct link)"
-                    value="{{ contact['profile_image'] if contact['profile_image'] and contact['profile_image'].startswith(('http://', 'https://')) else '' }}"
-                    style="flex: 1; min-width: 250px;">
-            </div>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 8px;">Paste an imgbb link to change the
+                photo, then <strong>crop it</strong> if needed. Leave empty to keep the current photo.</p>
+            <button type="button" id="open-crop" class="btn-secondary" style="margin-top: 0.5rem;">✂️ Crop
+                Photo</button>
 
             <details style="margin-top: 0.75rem; background: rgba(255, 255, 255, 0.05); padding: 0.75rem; border-radius: 8px;">
                 <summary style="cursor: pointer; font-size: 0.85rem; color: var(--primary-color); font-weight: 500;">
@@ -112,21 +106,11 @@
                     <li>Click <strong>HTML full linked</strong> — it gives a code like
                         <code style="font-size: 0.8rem;">&lt;a href="https://imgbb.com/"&gt;&lt;img src="https://i.ibb.co.com/ABCD/img.png"&gt;&lt;/a&gt;</code>
                     </li>
-                    <li>Copy the <strong>entire code</strong> and paste it in the box above — your image link is picked
+                    <li>Copy the <strong>entire code</strong> and paste it in the box above — the image link is picked
                         out automatically. (A Direct link also works.)</li>
+                    <li>Click <strong>✂️ Crop Photo</strong> to adjust the image before saving.</li>
                 </ol>
             </details>
-        </div>
-
-        <div class="form-group">
-            <label for="file">Update PDF or Document</label>
-            {% if contact['file_path'] %}
-            <p style="font-size: 0.8rem; color: var(--primary-color);">Current file: {{
-                contact['file_path'].split('/')[-1] }}</p>
-            {% endif %}
-            <input type="file" id="file" name="file" accept=".pdf,.jpg,.jpeg,.png">
-            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 5px;">Leave empty to keep current file.
-            </p>
         </div>
 
         <button type="submit" class="btn-primary">Update Contact</button>
@@ -158,52 +142,74 @@
 
 <script>
     let cropper;
-    const profileImageInput = document.getElementById('profile_image');
+    const urlInput = document.getElementById('profile_image_url');
     const cropperModal = document.getElementById('cropperModal');
     const cropperImage = document.getElementById('cropper-image');
     const croppedInput = document.getElementById('cropped_image_base64');
     const previewContainer = document.getElementById('avatar-preview-container');
     const previewImage = document.getElementById('avatar-preview');
-    const urlInput = document.getElementById('profile_image_url');
+    const cropButton = document.getElementById('open-crop');
+    let currentImageUrl = null;
 
-    // Keep file upload and imgbb link mutually exclusive
+    function extractImageUrl(value) {
+        const match = /src=["']([^"']+)["']/.exec(value || '');
+        return match ? match[1] : (value || '').trim();
+    }
+
+    function proxiedSrc(url) {
+        return '/fetch-image?url=' + encodeURIComponent(url);
+    }
+
+    // Pre-fill the "current" image from an existing external link
     urlInput.addEventListener('input', function () {
-        if (urlInput.value.trim()) {
-            profileImageInput.value = '';
+        currentImageUrl = extractImageUrl(urlInput.value);
+        if (currentImageUrl) {
+            croppedInput.value = '';
         }
     });
 
-    profileImageInput.addEventListener('change', function (e) {
-        urlInput.value = '';
-        const files = e.target.files;
-        if (files && files.length > 0) {
-            const reader = new FileReader();
-            reader.onload = function (e) {
-                cropperImage.src = e.target.result;
-                cropperModal.style.display = 'block';
+    urlInput.addEventListener('change', function () {
+        const imgUrl = extractImageUrl(urlInput.value);
+        if (!/^https?:\/\//i.test(imgUrl)) return;
+        currentImageUrl = imgUrl;
+        croppedInput.value = '';
+        previewImage.onerror = function () {
+            previewContainer.style.display = 'none';
+        };
+        previewImage.onload = function () {
+            previewContainer.style.display = 'block';
+        };
+        previewImage.src = proxiedSrc(imgUrl);
+    });
 
-                if (cropper) {
-                    cropper.destroy();
-                }
-
-                cropper = new Cropper(cropperImage, {
-                    aspectRatio: 1,
-                    viewMode: 1,
-                    guides: true,
-                    background: false,
-                    autoCropArea: 0.8,
-                    responsive: true,
-                    checkOrientation: false,
-                    cropBoxMovable: true,
-                    cropBoxResizable: true,
-                    toggleDragModeOnDblclick: false,
-                });
-            };
-            reader.readAsDataURL(files[0]);
+    cropButton.addEventListener('click', function () {
+        if (!currentImageUrl || !/^https?:\/\//i.test(currentImageUrl)) {
+            alert('Paste an imgbb link above first.');
+            return;
         }
+        cropperImage.onload = function () {
+            if (cropper) {
+                cropper.destroy();
+            }
+            cropper = new Cropper(cropperImage, {
+                aspectRatio: 1,
+                viewMode: 1,
+                guides: true,
+                background: false,
+                autoCropArea: 0.8,
+                responsive: true,
+                checkOrientation: false,
+                cropBoxMovable: true,
+                cropBoxResizable: true,
+                toggleDragModeOnDblclick: false,
+            });
+        };
+        cropperImage.src = proxiedSrc(currentImageUrl);
+        cropperModal.style.display = 'block';
     });
 
     document.getElementById('save-crop').addEventListener('click', function () {
+        if (!cropper) return;
         const canvas = cropper.getCroppedCanvas({
             width: 500,
             height: 500,
@@ -229,18 +235,15 @@
 
     document.getElementById('cancel-crop').addEventListener('click', function () {
         cropperModal.style.display = 'none';
-        profileImageInput.value = '';
     });
 
     document.querySelector('.close-modal').addEventListener('click', function () {
         cropperModal.style.display = 'none';
-        profileImageInput.value = '';
     });
 
     window.onclick = function (event) {
         if (event.target == cropperModal) {
             cropperModal.style.display = 'none';
-            profileImageInput.value = '';
         }
     };
 </script>

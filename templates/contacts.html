@@ -42,10 +42,6 @@
 <div class="contact-grid">
     {% for contact in contacts %}
     <div class="contact-card">
-        {% if contact['file_path'] %}
-        <span class="card-badge-file">📄 Doc Attach</span>
-        {% endif %}
-
         <div class="card-header">
             {% if contact['profile_image'] %}
             <img src="{{ contact['profile_image'] | avatar_src }}" alt="Photo" class="card-avatar">
@@ -112,14 +108,6 @@
             </div>
             {% endif %}
 
-            {% if contact['file_path'] %}
-            <div class="card-info-item" style="margin-top: 0.5rem;">
-                <a href="{{ url_for('static', filename=contact['file_path']) }}" target="_blank"
-                    style="color: #22c55e; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem;">
-                    📄 View Attached Document
-                </a>
-            </div>
-            {% endif %}
         </div>
 
         <div class="card-footer">
