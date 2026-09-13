@@ -2,13 +2,13 @@ import sqlite3
 import uuid
 import os
 import io
-import re
 import qrcode
 import bcrypt
 import base64
 import requests
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from werkzeug.utils import secure_filename
 from urllib.parse import quote
 from flask import Flask, render_template, request, redirect, url_for, Response, abort, flash
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -16,37 +16,16 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'default-dev-key-change-in-prod')
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
-IMG_BB_API_KEY = os.environ.get('IMG_BB_API_KEY', '')
 DB_FILE = 'contacts.db'
 USE_POSTGRES = bool(DATABASE_URL)
+UPLOAD_FOLDER = 'static/uploads'
+ALLOWED_EXTENSIONS = {'pdf', 'jpg', 'jpeg', 'png'}
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-def extract_image_url(value):
-    """Return a usable image URL from a pasted link or an imgbb embed snippet.
-    Accepts a raw URL (Direct link) or a whole 'HTML full linked' snippet
-    by pulling the src="..." URL out of it."""
-    value = (value or '').strip()
-    if not value:
-        return ''
-    match = re.search(r'src=["\']([^"\']+)["\']', value)
-    if match:
-        return match.group(1)
-    return value
-
-def upload_to_imgbb(image_bytes):
-    """Upload cropped image bytes to imgbb and return the hosted image URL."""
-    if not IMG_BB_API_KEY:
-        raise RuntimeError('IMG_BB_API_KEY is not configured on the server')
-    resp = requests.post(
-        'https://api.imgbb.com/1/upload',
-        data={'key': IMG_BB_API_KEY},
-        files={'image': ('cropped_avatar.png', image_bytes, 'image/png')},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    payload = resp.json()
-    if not payload.get('success'):
-        raise RuntimeError(f"imgbb upload failed: {payload.get('error')}")
-    return payload['data']['url']
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def shorten_url(long_url):
     """Uses TinyURL to shorten the URL"""
@@ -211,16 +190,6 @@ def fmt_date(value):
         return '—'
     return str(value)[:10]
 
-@app.template_filter('avatar_src')
-def avatar_src(value):
-    """Return a renderable <img> src for a stored profile_image value.
-    Accepts full URLs (imgbb etc.) or relative static uploads paths."""
-    if not value:
-        return None
-    if str(value).startswith(('http://', 'https://')):
-        return value
-    return url_for('static', filename=str(value))
-
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -231,7 +200,7 @@ def login():
         user_data = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
         conn.close()
         
-        if user_data and bcrypt.checkpw(password.encode('utf-8'), bytes(user_data['password_hash'])):
+        if user_data and bcrypt.checkpw(password.encode('utf-8'), user_data['password_hash']):
             user = User(user_data['id'], user_data['username'], bool(user_data['is_admin']))
             login_user(user)
             return redirect(url_for('contacts_list'))
@@ -288,7 +257,7 @@ def settings():
 
         conn = get_db_connection()
         user_data = conn.execute('SELECT * FROM users WHERE id = ?', (current_user.id,)).fetchone()
-        if not user_data or not bcrypt.checkpw(current_password.encode('utf-8'), bytes(user_data['password_hash'])):
+        if not user_data or not bcrypt.checkpw(current_password.encode('utf-8'), user_data['password_hash']):
             conn.close()
             flash('Current password is incorrect')
             return redirect(url_for('settings'))
@@ -489,29 +458,6 @@ def contacts_list():
 
 
 
-@app.route('/fetch-image')
-@login_required
-def fetch_image():
-    """Proxy a pasted imgbb URL as a same-origin image.
-    Loading a cross-origin image directly would 'taint' the canvas and make
-    cropper.js unable to export it — proxying through the app fixes that."""
-    url = request.args.get('url', '')
-    if not url.startswith(('http://', 'https://')):
-        abort(400, description='Invalid image URL')
-    try:
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-    except requests.RequestException:
-        abort(400, description='Could not fetch the image')
-
-    ctype = resp.headers.get('Content-Type', '').split(';')[0].lower()
-    if not ctype.startswith('image/'):
-        abort(400, description='The link does not point to an image')
-    if len(resp.content) > 10 * 1024 * 1024:
-        abort(400, description='The image is too large')
-
-    return Response(resp.content, mimetype=ctype)
-
 @app.route('/create', methods=['POST'])
 @login_required
 def create_contact():
@@ -530,21 +476,41 @@ def create_contact():
     contact_type = request.form.get('contact_type')
     mobile = request.form.get('mobile')
     
+    file_path = None
+    if 'file' in request.files:
+        file = request.files['file']
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            filename = f"{uuid.uuid4().hex}_{filename}"
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            file_path = f"uploads/{filename}"
+            
     profile_image = None
     cropped_base64 = request.form.get('cropped_image_base64')
-    profile_image_url = extract_image_url(request.form.get('profile_image_url'))
-
+    
     if cropped_base64 and ',' in cropped_base64:
-        # User cropped the pasted image — re-upload the result to imgbb
+        # Process base64 cropped image
         try:
-            _, imgstr = cropped_base64.split(';base64,')
+            format, imgstr = cropped_base64.split(';base64,')
             img_data = base64.b64decode(imgstr)
-            profile_image = upload_to_imgbb(img_data)
+            img_filename = f"avatar_{uuid.uuid4().hex}.png"
+            save_path = os.path.join(app.config['UPLOAD_FOLDER'], img_filename)
+            
+            with open(save_path, 'wb') as f:
+                f.write(img_data)
+            
+            profile_image = f"uploads/{img_filename}"
         except Exception as e:
-            print(f"Error uploading cropped image to imgbb: {e}")
-            profile_image = profile_image_url
-    elif profile_image_url.startswith(('http://', 'https://')):
-        profile_image = profile_image_url
+            print(f"Error processing cropped image: {e}")
+            
+    if not profile_image and 'profile_image' in request.files:
+        img_file = request.files['profile_image']
+        if img_file and allowed_file(img_file.filename):
+            img_filename = secure_filename(img_file.filename)
+            img_filename = f"avatar_{uuid.uuid4().hex}_{img_filename}"
+            save_path = os.path.join(app.config['UPLOAD_FOLDER'], img_filename)
+            img_file.save(save_path)
+            profile_image = f"uploads/{img_filename}"
     
     # Generate shorter 6-character ID for simpler QR codes
     unique_id = str(uuid.uuid4())[:6]
@@ -555,9 +521,9 @@ def create_contact():
     
     conn = get_db_connection()
     conn.execute('''
-        INSERT INTO contacts (id, first_name, last_name, phone, email, company, job_title, address, website, contact_type, mobile, profile_image, short_url, user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (unique_id, first_name, last_name, phone, email, company, job_title, address, website, contact_type, mobile, profile_image, short_url, current_user.id))
+        INSERT INTO contacts (id, first_name, last_name, phone, email, company, job_title, address, website, contact_type, mobile, file_path, profile_image, short_url, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (unique_id, first_name, last_name, phone, email, company, job_title, address, website, contact_type, mobile, file_path, profile_image, short_url, current_user.id))
     conn.commit()
     conn.close()
     
@@ -629,24 +595,42 @@ def update_contact(unique_id):
     if not current_user.is_admin and contact['user_id'] != current_user.id:
         conn.close()
         abort(403)
-
-    # Handle Profile Image (imgbb only)
+    
+    # Handle File Upload (PDF/Document)
+    if 'file' in request.files:
+        file = request.files['file']
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            filename = f"{uuid.uuid4().hex}_{filename}"
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            file_path = f"uploads/{filename}"
+            conn.execute('UPDATE contacts SET file_path = ? WHERE id = ?', (file_path, unique_id))
+            
+    # Handle Profile Image Upload (Cropped or Raw)
     cropped_base64 = request.form.get('cropped_image_base64')
-    profile_image_url = extract_image_url(request.form.get('profile_image_url'))
-
     if cropped_base64 and ',' in cropped_base64:
-        # User cropped the pasted image — re-upload the result to imgbb
         try:
-            _, imgstr = cropped_base64.split(';base64,')
+            format, imgstr = cropped_base64.split(';base64,')
             img_data = base64.b64decode(imgstr)
-            new_img = upload_to_imgbb(img_data)
-            conn.execute('UPDATE contacts SET profile_image = ? WHERE id = ?', (new_img, unique_id))
+            img_filename = f"avatar_{uuid.uuid4().hex}.png"
+            save_path = os.path.join(app.config['UPLOAD_FOLDER'], img_filename)
+            
+            with open(save_path, 'wb') as f:
+                f.write(img_data)
+            
+            profile_image = f"uploads/{img_filename}"
+            conn.execute('UPDATE contacts SET profile_image = ? WHERE id = ?', (profile_image, unique_id))
         except Exception as e:
-            print(f"Error uploading cropped image to imgbb: {e}")
-            if profile_image_url.startswith(('http://', 'https://')):
-                conn.execute('UPDATE contacts SET profile_image = ? WHERE id = ?', (profile_image_url, unique_id))
-    elif profile_image_url.startswith(('http://', 'https://')):
-        conn.execute('UPDATE contacts SET profile_image = ? WHERE id = ?', (profile_image_url, unique_id))
+            print(f"Error processing cropped image update: {e}")
+            
+    elif 'profile_image' in request.files:
+        img_file = request.files['profile_image']
+        if img_file and allowed_file(img_file.filename):
+            img_filename = secure_filename(img_file.filename)
+            img_filename = f"avatar_{uuid.uuid4().hex}_{img_filename}"
+            img_file.save(os.path.join(app.config['UPLOAD_FOLDER'], img_filename))
+            profile_image = f"uploads/{img_filename}"
+            conn.execute('UPDATE contacts SET profile_image = ? WHERE id = ?', (profile_image, unique_id))
 
     # Update other fields
     conn.execute('''
@@ -724,6 +708,23 @@ def delete_contact(unique_id):
         conn.close()
         abort(403)
     
+    # Delete associated files if they exist
+    if contact['profile_image']:
+        img_path = os.path.join(app.config['UPLOAD_FOLDER'], contact['profile_image'].split('/')[-1])
+        if os.path.exists(img_path):
+            try:
+                os.remove(img_path)
+            except Exception as e:
+                print(f"Error deleting profile image: {e}")
+                
+    if contact['file_path']:
+        doc_path = os.path.join(app.config['UPLOAD_FOLDER'], contact['file_path'].split('/')[-1])
+        if os.path.exists(doc_path):
+            try:
+                os.remove(doc_path)
+            except Exception as e:
+                print(f"Error deleting file: {e}")
+        
     # Delete from database
     conn.execute('DELETE FROM contacts WHERE id = ?', (unique_id,))
     conn.commit()
@@ -798,14 +799,13 @@ def generate_vcard(contact):
     # Add profile image to vCard if it exists
     if contact['profile_image']:
         try:
-            # profile_image is a hosted URL (imgbb etc.) — fetch its bytes
-            img_url = str(contact['profile_image'])
-            if img_url.startswith(('http://', 'https://')):
-                resp = requests.get(img_url, timeout=15)
-                resp.raise_for_status()
-                ctype = resp.headers.get('Content-Type', '').split(';')[0].lower()
-                if ctype.startswith('image/') and len(resp.content) <= 10 * 1024 * 1024:
-                    encoded_string = base64.b64encode(resp.content).decode('utf-8')
+            # profile_image is stored as 'uploads/filename.ext'
+            # We need the full path to read it
+            img_filename = contact['profile_image'].split('/')[-1]
+            img_path = os.path.join(app.config['UPLOAD_FOLDER'], img_filename)
+            if os.path.exists(img_path):
+                with open(img_path, 'rb') as img_f:
+                    encoded_string = base64.b64encode(img_f.read()).decode('utf-8')
                     # PHOTO property in vCard 3.0
                     lines.append(f"PHOTO;TYPE=JPEG;ENCODING=b:{encoded_string}")
         except Exception as e:
