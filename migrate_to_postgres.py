@@ -2,7 +2,6 @@ import os
 import sqlite3
 
 import psycopg2
-from psycopg2.extras import RealDictCursor
 
 SQLITE_FILE = 'contacts.db'
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -65,32 +64,36 @@ def main():
     src.execute('UPDATE contacts SET user_id = (SELECT id FROM users ORDER BY id LIMIT 1) WHERE user_id IS NULL')
     src.commit()
 
-    pg = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    pg = psycopg2.connect(DATABASE_URL)
+    cur = pg.cursor()
 
-    pg.execute(SSQL)
-    pg.execute(USQL)
+    cur.execute(SSQL)
+    cur.execute(USQL)
 
     contacts = src.execute('SELECT * FROM contacts').fetchall()
     for row in contacts:
-        pg.execute(
+        cur.execute(
             f"INSERT INTO contacts ({', '.join(CONTACTS_COLUMNS)}) "
-            f"VALUES ({', '.join(['%s'] * len(CONTACTS_COLUMNS))})",
+            f"VALUES ({', '.join(['%s'] * len(CONTACTS_COLUMNS))}) "
+            "ON CONFLICT (id) DO NOTHING",
             tuple(row[c] for c in CONTACTS_COLUMNS)
         )
     print(f"Copied {len(contacts)} contacts.")
 
     users = src.execute('SELECT * FROM users').fetchall()
     for row in users:
-        pg.execute(
+        cur.execute(
             "INSERT INTO users (id, username, password_hash, is_admin, created_at) "
-            "VALUES (%s, %s, %s, %s, %s)",
+            "VALUES (%s, %s, %s, %s, %s) "
+            "ON CONFLICT (id) DO NOTHING",
             (row['id'], row['username'], row['password_hash'], bool(row['is_admin']), row['created_at'])
         )
     if users:
-        pg.execute("SELECT setval(pg_get_serial_sequence('users', 'id'), (SELECT MAX(id) FROM users));")
+        cur.execute("SELECT setval(pg_get_serial_sequence('users', 'id'), (SELECT MAX(id) FROM users));")
     print(f"Copied {len(users)} users.")
 
     pg.commit()
+    cur.close()
     pg.close()
     src.close()
     print("Migration complete.")

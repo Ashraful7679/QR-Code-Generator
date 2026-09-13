@@ -7,7 +7,10 @@ import bcrypt
 import base64
 import requests
 import psycopg2
+from psycopg2.extensions import BYTES, register_type
 from psycopg2.extras import RealDictCursor
+
+register_type(BYTES)  # decode Postgres BYTEA as bytes, not memoryview (bcrypt needs bytes)
 from werkzeug.utils import secure_filename
 from urllib.parse import quote
 from flask import Flask, render_template, request, redirect, url_for, Response, abort, flash
@@ -190,6 +193,16 @@ def fmt_date(value):
         return '—'
     return str(value)[:10]
 
+@app.template_filter('avatar_src')
+def avatar_src(value):
+    """Return a renderable <img> src for a stored profile_image value.
+    Accepts full URLs (imgbb etc.) or relative static uploads paths."""
+    if not value:
+        return None
+    if str(value).startswith(('http://', 'https://')):
+        return value
+    return url_for('static', filename=str(value))
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -200,7 +213,7 @@ def login():
         user_data = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
         conn.close()
         
-        if user_data and bcrypt.checkpw(password.encode('utf-8'), user_data['password_hash']):
+        if user_data and bcrypt.checkpw(password.encode('utf-8'), bytes(user_data['password_hash'])):
             user = User(user_data['id'], user_data['username'], bool(user_data['is_admin']))
             login_user(user)
             return redirect(url_for('contacts_list'))
@@ -257,7 +270,7 @@ def settings():
 
         conn = get_db_connection()
         user_data = conn.execute('SELECT * FROM users WHERE id = ?', (current_user.id,)).fetchone()
-        if not user_data or not bcrypt.checkpw(current_password.encode('utf-8'), user_data['password_hash']):
+        if not user_data or not bcrypt.checkpw(current_password.encode('utf-8'), bytes(user_data['password_hash'])):
             conn.close()
             flash('Current password is incorrect')
             return redirect(url_for('settings'))
