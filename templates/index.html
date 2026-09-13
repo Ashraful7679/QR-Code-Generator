@@ -62,34 +62,33 @@
         </div>
 
         <div class="form-group">
-            <label for="profile_image_url">Contact Profile Image (Avatar)</label>
-            <input type="url" id="profile_image_url" name="profile_image_url" autocomplete="off"
-                placeholder="Paste your imgbb link here (HTML full linked or Direct link)...">
+            <label for="profile_image_file">Contact Profile Image (Avatar)</label>
+            <input type="file" id="profile_image_file" accept="image/*"
+                style="width: 100%; padding: 0.6rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--input-bg); color: var(--text-muted);">
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 8px;">Choose a photo from your device,
+                then <strong>crop it</strong> if needed. It is stored online so it works on any device.</p>
             <input type="hidden" name="cropped_image_base64" id="cropped_image_base64">
             <div id="avatar-preview-container" style="display: none; margin-top: 10px;">
                 <p style="font-size: 0.8rem; color: var(--text-muted);">Preview:</p>
                 <img id="avatar-preview" src="#"
                     style="width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 2px solid var(--primary-color);">
             </div>
-            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 8px;">Pick an image on imgbb.com and
-                paste its link here. You can then <strong>crop it</strong> if needed.</p>
             <button type="button" id="open-crop" class="btn-secondary" style="margin-top: 0.5rem;">✂️ Crop Photo</button>
 
             <details style="margin-top: 0.75rem; background: rgba(255, 255, 255, 0.05); padding: 0.75rem; border-radius: 8px;">
                 <summary style="cursor: pointer; font-size: 0.85rem; color: var(--primary-color); font-weight: 500;">
-                    📘 How to upload on imgbb.com and copy the link</summary>
+                    📘 Use an imgbb link instead</summary>
                 <ol style="margin: 0.75rem 0 0; padding-left: 1.25rem; font-size: 0.85rem; color: var(--text-muted); line-height: 1.6;">
                     <li>On your computer/phone, go to <a href="https://imgbb.com" target="_blank"
                             rel="noopener" style="color: var(--primary-color);">imgbb.com</a></li>
                     <li>Click <strong>Upload</strong> or <strong>Start uploading</strong> and choose your photo</li>
                     <li>After it uploads, scroll down to the <strong>Embed codes</strong> section</li>
-                    <li>Click <strong>HTML full linked</strong> — it gives a code like
-                        <code style="font-size: 0.8rem;">&lt;a href="https://imgbb.com/"&gt;&lt;img src="https://i.ibb.co.com/ABCD/img.png"&gt;&lt;/a&gt;</code>
-                    </li>
-                    <li>Copy the <strong>entire code</strong> and paste it in the box above — the image link is picked
-                        out automatically. (A Direct link also works.)</li>
-                    <li>Click <strong>✂️ Crop Photo</strong> to adjust the image before saving.</li>
+                    <li>Click <strong>HTML full linked</strong>, copy the <strong>entire code</strong> and paste it
+                        below — the image link is picked out automatically. (A Direct link also works.)</li>
                 </ol>
+                <input type="url" id="profile_image_url" name="profile_image_url" autocomplete="off"
+                    placeholder="Paste your imgbb link here (HTML full linked or Direct link)..."
+                    style="margin-top: 0.75rem;">
             </details>
         </div>
 
@@ -124,6 +123,7 @@
 
 <script>
     let cropper;
+    const fileInput = document.getElementById('profile_image_file');
     const urlInput = document.getElementById('profile_image_url');
     const cropperModal = document.getElementById('cropperModal');
     const cropperImage = document.getElementById('cropper-image');
@@ -131,7 +131,7 @@
     const previewContainer = document.getElementById('avatar-preview-container');
     const previewImage = document.getElementById('avatar-preview');
     const cropButton = document.getElementById('open-crop');
-    let currentImageUrl = null;
+    let currentImageSource = null;
 
     function extractImageUrl(value) {
         const match = /src=["']([^"']+)["']/.exec(value || '');
@@ -142,20 +142,35 @@
         return '/fetch-image?url=' + encodeURIComponent(url);
     }
 
-    // When the link changes, remember the clean image URL and reset any crop
+    // Direct upload: pick a photo from the device (works offline, no proxy needed)
+    fileInput.addEventListener('change', function () {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            currentImageSource = e.target.result;
+            urlInput.value = '';
+            croppedInput.value = currentImageSource;
+            previewImage.src = currentImageSource;
+            previewContainer.style.display = 'block';
+        };
+        reader.readAsDataURL(file);
+    });
+
+    // When a link is pasted, remember the clean image URL and reset any crop
     urlInput.addEventListener('input', function () {
-        currentImageUrl = extractImageUrl(urlInput.value);
-        if (currentImageUrl) {
+        currentImageSource = extractImageUrl(urlInput.value);
+        if (currentImageSource) {
             croppedInput.value = '';
         }
     });
 
-    // Fetch the image through the proxy and show a preview as soon as a valid
-    // link is provided (also on paste/blur, not only while typing)
+    // Fetch the pasted link through the proxy and show a preview as soon as a
+    // valid link is provided (also on paste/blur, not only while typing)
     urlInput.addEventListener('change', function () {
         const imgUrl = extractImageUrl(urlInput.value);
         if (!/^https?:\/\//i.test(imgUrl)) return;
-        currentImageUrl = imgUrl;
+        currentImageSource = imgUrl;
         croppedInput.value = '';
         previewImage.onerror = function () {
             previewContainer.style.display = 'none';
@@ -167,8 +182,8 @@
     });
 
     cropButton.addEventListener('click', function () {
-        if (!currentImageUrl || !/^https?:\/\//i.test(currentImageUrl)) {
-            alert('Paste an imgbb link above first.');
+        if (!currentImageSource) {
+            alert('Choose a photo or paste an imgbb link above first.');
             return;
         }
         cropperImage.onload = function () {
@@ -188,7 +203,11 @@
                 toggleDragModeOnDblclick: false,
             });
         };
-        cropperImage.src = proxiedSrc(currentImageUrl);
+        if (currentImageSource.indexOf('data:') === 0) {
+            cropperImage.src = currentImageSource;
+        } else {
+            cropperImage.src = proxiedSrc(currentImageSource);
+        }
         cropperModal.style.display = 'block';
     });
 
