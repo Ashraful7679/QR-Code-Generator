@@ -4,3 +4,4 @@ Pillow>=12.2.0
 Flask-Login>=0.6.3
 bcrypt>=5.0.0
 requests>=2.33.1
+psycopg2-binary>=2.9.0

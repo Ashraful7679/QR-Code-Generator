@@ -25,6 +25,7 @@
                 <div class="nav-links">
                     <a href="{{ url_for('contacts_list') }}">📇 Contacts</a>
                     <a href="{{ url_for('index') }}">🏠 Add New</a>
+                    <a href="{{ url_for('settings') }}">⚙️ Settings</a>
 
                     {% if current_user.is_admin %}
                     <a href="{{ url_for('users_list') }}">👥 Users</a>

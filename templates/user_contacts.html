@@ -1,0 +1,67 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="header-row"
+    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; gap: 1rem; flex-wrap: wrap;">
+    <div>
+        <h1 style="margin-bottom: 0.25rem;">👤 Contacts of {{ owner.username }}</h1>
+        <p class="subtitle" style="margin: 0;">{{ total }} contact{{ '' if total == 1 else 's' }}</p>
+    </div>
+    <a href="{{ url_for('users_list') }}" class="btn-secondary"
+        style="text-decoration: none; padding: 0.6rem 1.2rem;">← Back to Users</a>
+</div>
+
+{% with messages = get_flashed_messages() %}
+{% if messages %}
+<div
+    style="background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); color: #86efac; padding: 0.75rem; border-radius: 8px; margin-bottom: 1.5rem; text-align: center;">
+    {{ messages[0] }}
+</div>
+{% endif %}
+{% endwith %}
+
+{% if contacts %}
+<div style="overflow-x: auto;">
+    <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
+                <th style="text-align: left; padding: 1rem; color: var(--text-muted);">Name</th>
+                <th style="text-align: left; padding: 1rem; color: var(--text-muted);">Phone</th>
+                <th style="text-align: left; padding: 1rem; color: var(--text-muted);">Email</th>
+                <th style="text-align: left; padding: 1rem; color: var(--text-muted);">Created</th>
+                <th style="text-align: right; padding: 1rem; color: var(--text-muted);">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for contact in contacts %}
+            <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.05);">
+                <td style="padding: 1rem; color: var(--text-main); font-weight: 500;">
+                    {{ contact['first_name'] }} {{ contact['last_name'] }}
+                </td>
+                <td style="padding: 1rem; color: var(--text-muted);">{{ contact['phone'] }}</td>
+                <td style="padding: 1rem; color: var(--text-muted);">{{ contact['email'] or '—' }}</td>
+                <td style="padding: 1rem; color: var(--text-muted); font-size: 0.9rem;">{{ contact['created_at'] | fmt_date }}</td>
+                <td style="padding: 1rem; text-align: right; white-space: nowrap;">
+                    <a href="{{ url_for('edit_contact', unique_id=contact['id']) }}"
+                        style="color: #60a5fa; text-decoration: none; margin-right: 1rem;">✏️ Edit</a>
+                    <form method="POST" action="{{ url_for('delete_contact', unique_id=contact['id']) }}"
+                        style="display: inline;"
+                        onsubmit="return confirm('Delete this contact permanently?');">
+                        <button type="submit"
+                            style="background: rgba(239, 68, 68, 0.1); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3); padding: 0.3rem 0.7rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem;">
+                            🗑️ Delete
+                        </button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="empty-state" style="text-align: center; padding: 3rem 1rem;">
+    <p style="font-size: 3rem; margin-bottom: 1rem;">📭</p>
+    <p style="color: var(--text-muted);">This user has no contacts yet</p>
+</div>
+{% endif %}
+{% endblock %}

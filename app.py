@@ -2,26 +2,51 @@ import sqlite3
 import uuid
 import os
 import io
+import re
 import qrcode
 import bcrypt
 import base64
 import requests
-from werkzeug.utils import secure_filename
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from urllib.parse import quote
 from flask import Flask, render_template, request, redirect, url_for, Response, abort, flash
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'default-dev-key-change-in-prod')
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
+IMG_BB_API_KEY = os.environ.get('IMG_BB_API_KEY', '')
 DB_FILE = 'contacts.db'
-UPLOAD_FOLDER = 'static/uploads'
-ALLOWED_EXTENSIONS = {'pdf', 'jpg', 'jpeg', 'png'}
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+USE_POSTGRES = bool(DATABASE_URL)
 
-def allowed_file(filename):
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+def extract_image_url(value):
+    """Return a usable image URL from a pasted link or an imgbb embed snippet.
+    Accepts a raw URL (Direct link) or a whole 'HTML full linked' snippet
+    by pulling the src="..." URL out of it."""
+    value = (value or '').strip()
+    if not value:
+        return ''
+    match = re.search(r'src=["\']([^"\']+)["\']', value)
+    if match:
+        return match.group(1)
+    return value
+
+def upload_to_imgbb(image_bytes):
+    """Upload cropped image bytes to imgbb and return the hosted image URL."""
+    if not IMG_BB_API_KEY:
+        raise RuntimeError('IMG_BB_API_KEY is not configured on the server')
+    resp = requests.post(
+        'https://api.imgbb.com/1/upload',
+        data={'key': IMG_BB_API_KEY},
+        files={'image': ('cropped_avatar.png', image_bytes, 'image/png')},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    if not payload.get('success'):
+        raise RuntimeError(f"imgbb upload failed: {payload.get('error')}")
+    return payload['data']['url']
 
 def shorten_url(long_url):
     """Uses TinyURL to shorten the URL"""
@@ -47,10 +72,36 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
+class DB:
+    """Lightweight wrapper over sqlite3/psycopg2 so call sites stay identical.
+    Uses PostgreSQL when DATABASE_URL is set, otherwise local SQLite."""
+    def __init__(self, conn):
+        self.conn = conn
+        self.is_pg = isinstance(conn, psycopg2.extensions.connection)
+
+    def execute(self, sql, params=None):
+        if self.is_pg:
+            cur = self.conn.cursor()
+            cur.execute(sql.replace('?', '%s'), params or ())
+            return cur
+        return self.conn.execute(sql, params or ())
+
+    def commit(self):
+        self.conn.commit()
+
+    def rollback(self):
+        self.conn.rollback()
+
+    def close(self):
+        self.conn.close()
+
 def get_db_connection():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
+    if USE_POSTGRES:
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    else:
+        conn = sqlite3.connect(DB_FILE)
+        conn.row_factory = sqlite3.Row
+    return DB(conn)
 
 def init_db():
     conn = get_db_connection()
@@ -74,16 +125,41 @@ def init_db():
         )
     ''')
     
-    # Create users table
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash BLOB NOT NULL,
-            is_admin BOOLEAN DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+    if USE_POSTGRES:
+        # Create users table (PostgreSQL)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password_hash BYTEA NOT NULL,
+                is_admin BOOLEAN DEFAULT false,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+    else:
+        # Create users table (SQLite)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash BLOB NOT NULL,
+                is_admin BOOLEAN DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+    # Migration: add user ownership column to contacts (if missing)
+    if USE_POSTGRES:
+        conn.execute('ALTER TABLE contacts ADD COLUMN IF NOT EXISTS user_id INTEGER')
+    else:
+        try:
+            conn.execute('ALTER TABLE contacts ADD COLUMN user_id INTEGER')
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+    # Backfill owner for contacts created before ownership existed (first user = admin)
+    conn.execute('UPDATE contacts SET user_id = (SELECT id FROM users ORDER BY id LIMIT 1) WHERE user_id IS NULL')
+
     conn.commit()
     conn.close()
 
@@ -107,7 +183,7 @@ def create_default_admin():
     """Create default admin account if no users exist"""
     try:
         conn = get_db_connection()
-        user_count = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+        user_count = conn.execute('SELECT COUNT(*) AS total FROM users').fetchone()['total']
         
         if user_count == 0:
             # Create default admin
@@ -128,6 +204,23 @@ with app.app_context():
     init_db()
     create_default_admin()
 
+@app.template_filter('fmt_date')
+def fmt_date(value):
+    """Format a date/datetime as YYYY-MM-DD (works for str and datetime)."""
+    if value is None:
+        return '—'
+    return str(value)[:10]
+
+@app.template_filter('avatar_src')
+def avatar_src(value):
+    """Return a renderable <img> src for a stored profile_image value.
+    Accepts full URLs (imgbb etc.) or relative static uploads paths."""
+    if not value:
+        return None
+    if str(value).startswith(('http://', 'https://')):
+        return value
+    return url_for('static', filename=str(value))
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -138,7 +231,7 @@ def login():
         user_data = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
         conn.close()
         
-        if user_data and bcrypt.checkpw(password.encode('utf-8'), user_data['password_hash']):
+        if user_data and bcrypt.checkpw(password.encode('utf-8'), bytes(user_data['password_hash'])):
             user = User(user_data['id'], user_data['username'], bool(user_data['is_admin']))
             login_user(user)
             return redirect(url_for('contacts_list'))
@@ -146,6 +239,76 @@ def login():
         flash('Invalid username or password')
     
     return render_template('login.html')
+
+@app.route('/signup', methods=['GET', 'POST'])
+def signup():
+    if current_user.is_authenticated:
+        return redirect(url_for('contacts_list'))
+
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        confirm_password = request.form.get('confirm_password', '')
+
+        if not username or not password:
+            flash('Username and password are required')
+            return redirect(url_for('signup'))
+        if len(password) < 4:
+            flash('Password must be at least 4 characters')
+            return redirect(url_for('signup'))
+        if password != confirm_password:
+            flash('Passwords do not match')
+            return redirect(url_for('signup'))
+
+        password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+
+        conn = get_db_connection()
+        try:
+            conn.execute('INSERT INTO users (username, password_hash) VALUES (?, ?)',
+                         (username, password_hash))
+            conn.commit()
+            conn.close()
+            flash('Account created! You can now log in.')
+            return redirect(url_for('login'))
+        except (sqlite3.IntegrityError, psycopg2.errors.UniqueViolation):
+            conn.rollback()
+            conn.close()
+            flash('Username already exists')
+            return redirect(url_for('signup'))
+
+    return render_template('signup.html')
+
+@app.route('/settings', methods=['GET', 'POST'])
+@login_required
+def settings():
+    if request.method == 'POST':
+        current_password = request.form.get('current_password', '')
+        new_password = request.form.get('new_password', '')
+        confirm_password = request.form.get('confirm_password', '')
+
+        conn = get_db_connection()
+        user_data = conn.execute('SELECT * FROM users WHERE id = ?', (current_user.id,)).fetchone()
+        if not user_data or not bcrypt.checkpw(current_password.encode('utf-8'), bytes(user_data['password_hash'])):
+            conn.close()
+            flash('Current password is incorrect')
+            return redirect(url_for('settings'))
+        if len(new_password) < 4:
+            conn.close()
+            flash('New password must be at least 4 characters')
+            return redirect(url_for('settings'))
+        if new_password != confirm_password:
+            conn.close()
+            flash('New passwords do not match')
+            return redirect(url_for('settings'))
+
+        password_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
+        conn.execute('UPDATE users SET password_hash = ? WHERE id = ?', (password_hash, current_user.id))
+        conn.commit()
+        conn.close()
+        flash('Password updated successfully')
+        return redirect(url_for('settings'))
+
+    return render_template('settings.html')
 
 @app.route('/logout')
 @login_required
@@ -160,10 +323,56 @@ def users_list():
         abort(403)
     
     conn = get_db_connection()
-    users = conn.execute('SELECT * FROM users ORDER BY created_at DESC').fetchall()
+    users = conn.execute('''
+        SELECT u.*, COUNT(c.id) AS contact_count
+        FROM users u
+        LEFT JOIN contacts c ON c.user_id = u.id
+        GROUP BY u.id
+        ORDER BY u.created_at DESC
+    ''').fetchall()
     conn.close()
     
     return render_template('users.html', users=users)
+
+@app.route('/users/<int:user_id>/contacts')
+@login_required
+def user_contacts(user_id):
+    """Admin only: view all contacts belonging to a specific user"""
+    if not current_user.is_admin:
+        abort(403)
+    
+    conn = get_db_connection()
+    owner = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
+    if not owner:
+        conn.close()
+        abort(404)
+    
+    contacts = conn.execute('SELECT * FROM contacts WHERE user_id = ? ORDER BY created_at DESC', (user_id,)).fetchall()
+    total = conn.execute('SELECT COUNT(*) AS total FROM contacts WHERE user_id = ?', (user_id,)).fetchone()['total']
+    conn.close()
+    
+    return render_template('user_contacts.html', owner=owner, contacts=contacts, total=total)
+
+@app.route('/users/reset-password/<int:user_id>', methods=['POST'])
+@login_required
+def reset_user_password(user_id):
+    """Admin only: reset the password of any user"""
+    if not current_user.is_admin:
+        abort(403)
+    
+    new_password = request.form.get('new_password', '')
+    if len(new_password) < 4:
+        flash('Password must be at least 4 characters')
+        return redirect(url_for('users_list'))
+    
+    password_hash = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
+    conn = get_db_connection()
+    conn.execute('UPDATE users SET password_hash = ? WHERE id = ?', (password_hash, user_id))
+    conn.commit()
+    conn.close()
+    
+    flash('Password updated successfully')
+    return redirect(url_for('users_list'))
 
 @app.route('/users/create', methods=['POST'])
 @login_required
@@ -191,7 +400,9 @@ def create_user():
         conn.commit()
         conn.close()
         flash('User created successfully')
-    except sqlite3.IntegrityError:
+    except (sqlite3.IntegrityError, psycopg2.errors.UniqueViolation):
+        conn.rollback()
+        conn.close()
         flash('Username already exists')
     
     return redirect(url_for('users_list'))
@@ -224,55 +435,82 @@ def index():
 @app.route('/contacts')
 @login_required
 def contacts_list():
-    """Display all saved contacts with search and pagination"""
+    """Display saved contacts with search and pagination.
+    Regular users only see their own contacts; admins see all."""
     search_query = request.args.get('q', '')
     page = request.args.get('page', 1, type=int)
     per_page = 12
-    
-    conn = get_db_connection()
-    
+
+    user_filter = request.args.get('user', type=int)
+    if not current_user.is_admin:
+        user_filter = current_user.id
+
+    where = []
+    params = []
+    if user_filter is not None:
+        where.append('c.user_id = ?')
+        params.append(user_filter)
     if search_query:
-        # Search across multiple fields
-        # Note: Using % for wildcard search
-        contacts = conn.execute('''
-            SELECT * FROM contacts 
-            WHERE first_name LIKE ? 
-               OR last_name LIKE ? 
-               OR phone LIKE ? 
-               OR email LIKE ? 
-               OR company LIKE ?
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
-        ''', (f'%{search_query}%', f'%{search_query}%', f'%{search_query}%', 
-              f'%{search_query}%', f'%{search_query}%', per_page, (page - 1) * per_page)).fetchall()
-        
-        # Get total count for pagination
-        total = conn.execute('''
-            SELECT COUNT(*) FROM contacts 
-            WHERE first_name LIKE ? OR last_name LIKE ? OR phone LIKE ? OR email LIKE ? OR company LIKE ?
-        ''', (f'%{search_query}%', f'%{search_query}%', f'%{search_query}%', 
-              f'%{search_query}%', f'%{search_query}%')).fetchone()[0]
-    else:
-        # No search - get all contacts
-        contacts = conn.execute('''
-            SELECT * FROM contacts 
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
-        ''', (per_page, (page - 1) * per_page)).fetchall()
-        
-        total = conn.execute('SELECT COUNT(*) FROM contacts').fetchone()[0]
-    
+        where.append('(c.first_name LIKE ? OR c.last_name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR c.company LIKE ?)')
+        params.extend([f'%{search_query}%'] * 5)
+    where_sql = 'WHERE ' + ' AND '.join(where) if where else ''
+
+    conn = get_db_connection()
+
+    contacts = conn.execute(f'''
+        SELECT c.*, u.username AS owner_username
+        FROM contacts c
+        LEFT JOIN users u ON u.id = c.user_id
+        {where_sql}
+        ORDER BY c.created_at DESC
+        LIMIT ? OFFSET ?
+    ''', (*params, per_page, (page - 1) * per_page)).fetchall()
+
+    total = conn.execute(f'''
+        SELECT COUNT(*) AS total FROM contacts c
+        {where_sql}
+    ''', params).fetchone()['total']
+
+    users = []
+    if current_user.is_admin:
+        users = conn.execute('SELECT id, username FROM users ORDER BY username').fetchall()
+
     conn.close()
-    
+
     total_pages = (total + per_page - 1) // per_page
-    
-    return render_template('contacts.html', 
-                         contacts=contacts, 
-                         page=page, 
+
+    return render_template('contacts.html',
+                         contacts=contacts,
+                         page=page,
                          total_pages=total_pages,
-                         search_query=search_query)
+                         search_query=search_query,
+                         users=users,
+                         user_filter=user_filter)
 
 
+
+@app.route('/fetch-image')
+@login_required
+def fetch_image():
+    """Proxy a pasted imgbb URL as a same-origin image.
+    Loading a cross-origin image directly would 'taint' the canvas and make
+    cropper.js unable to export it — proxying through the app fixes that."""
+    url = request.args.get('url', '')
+    if not url.startswith(('http://', 'https://')):
+        abort(400, description='Invalid image URL')
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+    except requests.RequestException:
+        abort(400, description='Could not fetch the image')
+
+    ctype = resp.headers.get('Content-Type', '').split(';')[0].lower()
+    if not ctype.startswith('image/'):
+        abort(400, description='The link does not point to an image')
+    if len(resp.content) > 10 * 1024 * 1024:
+        abort(400, description='The image is too large')
+
+    return Response(resp.content, mimetype=ctype)
 
 @app.route('/create', methods=['POST'])
 @login_required
@@ -292,41 +530,21 @@ def create_contact():
     contact_type = request.form.get('contact_type')
     mobile = request.form.get('mobile')
     
-    file_path = None
-    if 'file' in request.files:
-        file = request.files['file']
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            filename = f"{uuid.uuid4().hex}_{filename}"
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            file_path = f"uploads/{filename}"
-            
     profile_image = None
     cropped_base64 = request.form.get('cropped_image_base64')
-    
+    profile_image_url = extract_image_url(request.form.get('profile_image_url'))
+
     if cropped_base64 and ',' in cropped_base64:
-        # Process base64 cropped image
+        # User cropped the pasted image — re-upload the result to imgbb
         try:
-            format, imgstr = cropped_base64.split(';base64,')
+            _, imgstr = cropped_base64.split(';base64,')
             img_data = base64.b64decode(imgstr)
-            img_filename = f"avatar_{uuid.uuid4().hex}.png"
-            save_path = os.path.join(app.config['UPLOAD_FOLDER'], img_filename)
-            
-            with open(save_path, 'wb') as f:
-                f.write(img_data)
-            
-            profile_image = f"uploads/{img_filename}"
+            profile_image = upload_to_imgbb(img_data)
         except Exception as e:
-            print(f"Error processing cropped image: {e}")
-            
-    if not profile_image and 'profile_image' in request.files:
-        img_file = request.files['profile_image']
-        if img_file and allowed_file(img_file.filename):
-            img_filename = secure_filename(img_file.filename)
-            img_filename = f"avatar_{uuid.uuid4().hex}_{img_filename}"
-            save_path = os.path.join(app.config['UPLOAD_FOLDER'], img_filename)
-            img_file.save(save_path)
-            profile_image = f"uploads/{img_filename}"
+            print(f"Error uploading cropped image to imgbb: {e}")
+            profile_image = profile_image_url
+    elif profile_image_url.startswith(('http://', 'https://')):
+        profile_image = profile_image_url
     
     # Generate shorter 6-character ID for simpler QR codes
     unique_id = str(uuid.uuid4())[:6]
@@ -337,9 +555,9 @@ def create_contact():
     
     conn = get_db_connection()
     conn.execute('''
-        INSERT INTO contacts (id, first_name, last_name, phone, email, company, job_title, address, website, contact_type, mobile, file_path, profile_image, short_url)
+        INSERT INTO contacts (id, first_name, last_name, phone, email, company, job_title, address, website, contact_type, mobile, profile_image, short_url, user_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (unique_id, first_name, last_name, phone, email, company, job_title, address, website, contact_type, mobile, file_path, profile_image, short_url))
+    ''', (unique_id, first_name, last_name, phone, email, company, job_title, address, website, contact_type, mobile, profile_image, short_url, current_user.id))
     conn.commit()
     conn.close()
     
@@ -379,6 +597,8 @@ def edit_contact(unique_id):
     
     if not contact:
         abort(404)
+    if not current_user.is_admin and contact['user_id'] != current_user.id:
+        abort(403)
     
     return render_template('edit.html', contact=contact, unique_id=unique_id)
 
@@ -402,41 +622,31 @@ def update_contact(unique_id):
     
     conn = get_db_connection()
     
-    # Handle File Upload (PDF/Document)
-    if 'file' in request.files:
-        file = request.files['file']
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            filename = f"{uuid.uuid4().hex}_{filename}"
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            file_path = f"uploads/{filename}"
-            conn.execute('UPDATE contacts SET file_path = ? WHERE id = ?', (file_path, unique_id))
-            
-    # Handle Profile Image Upload (Cropped or Raw)
+    contact = conn.execute('SELECT * FROM contacts WHERE id = ?', (unique_id,)).fetchone()
+    if not contact:
+        conn.close()
+        abort(404)
+    if not current_user.is_admin and contact['user_id'] != current_user.id:
+        conn.close()
+        abort(403)
+
+    # Handle Profile Image (imgbb only)
     cropped_base64 = request.form.get('cropped_image_base64')
+    profile_image_url = extract_image_url(request.form.get('profile_image_url'))
+
     if cropped_base64 and ',' in cropped_base64:
+        # User cropped the pasted image — re-upload the result to imgbb
         try:
-            format, imgstr = cropped_base64.split(';base64,')
+            _, imgstr = cropped_base64.split(';base64,')
             img_data = base64.b64decode(imgstr)
-            img_filename = f"avatar_{uuid.uuid4().hex}.png"
-            save_path = os.path.join(app.config['UPLOAD_FOLDER'], img_filename)
-            
-            with open(save_path, 'wb') as f:
-                f.write(img_data)
-            
-            profile_image = f"uploads/{img_filename}"
-            conn.execute('UPDATE contacts SET profile_image = ? WHERE id = ?', (profile_image, unique_id))
+            new_img = upload_to_imgbb(img_data)
+            conn.execute('UPDATE contacts SET profile_image = ? WHERE id = ?', (new_img, unique_id))
         except Exception as e:
-            print(f"Error processing cropped image update: {e}")
-            
-    elif 'profile_image' in request.files:
-        img_file = request.files['profile_image']
-        if img_file and allowed_file(img_file.filename):
-            img_filename = secure_filename(img_file.filename)
-            img_filename = f"avatar_{uuid.uuid4().hex}_{img_filename}"
-            img_file.save(os.path.join(app.config['UPLOAD_FOLDER'], img_filename))
-            profile_image = f"uploads/{img_filename}"
-            conn.execute('UPDATE contacts SET profile_image = ? WHERE id = ?', (profile_image, unique_id))
+            print(f"Error uploading cropped image to imgbb: {e}")
+            if profile_image_url.startswith(('http://', 'https://')):
+                conn.execute('UPDATE contacts SET profile_image = ? WHERE id = ?', (profile_image_url, unique_id))
+    elif profile_image_url.startswith(('http://', 'https://')):
+        conn.execute('UPDATE contacts SET profile_image = ? WHERE id = ?', (profile_image_url, unique_id))
 
     # Update other fields
     conn.execute('''
@@ -507,24 +717,13 @@ def delete_contact(unique_id):
     conn = get_db_connection()
     contact = conn.execute('SELECT * FROM contacts WHERE id = ?', (unique_id,)).fetchone()
     
-    if contact:
-        # Delete associated files if they exist
-        if contact['profile_image']:
-            img_path = os.path.join(app.config['UPLOAD_FOLDER'], contact['profile_image'].split('/')[-1])
-            if os.path.exists(img_path):
-                try:
-                    os.remove(img_path)
-                except Exception as e:
-                    print(f"Error deleting profile image: {e}")
-                    
-        if contact['file_path']:
-            doc_path = os.path.join(app.config['UPLOAD_FOLDER'], contact['file_path'].split('/')[-1])
-            if os.path.exists(doc_path):
-                try:
-                    os.remove(doc_path)
-                except Exception as e:
-                    print(f"Error deleting file: {e}")
-        
+    if not contact:
+        conn.close()
+        abort(404)
+    if not current_user.is_admin and contact['user_id'] != current_user.id:
+        conn.close()
+        abort(403)
+    
     # Delete from database
     conn.execute('DELETE FROM contacts WHERE id = ?', (unique_id,))
     conn.commit()
@@ -599,13 +798,14 @@ def generate_vcard(contact):
     # Add profile image to vCard if it exists
     if contact['profile_image']:
         try:
-            # profile_image is stored as 'uploads/filename.ext'
-            # We need the full path to read it
-            img_filename = contact['profile_image'].split('/')[-1]
-            img_path = os.path.join(app.config['UPLOAD_FOLDER'], img_filename)
-            if os.path.exists(img_path):
-                with open(img_path, 'rb') as img_f:
-                    encoded_string = base64.b64encode(img_f.read()).decode('utf-8')
+            # profile_image is a hosted URL (imgbb etc.) — fetch its bytes
+            img_url = str(contact['profile_image'])
+            if img_url.startswith(('http://', 'https://')):
+                resp = requests.get(img_url, timeout=15)
+                resp.raise_for_status()
+                ctype = resp.headers.get('Content-Type', '').split(';')[0].lower()
+                if ctype.startswith('image/') and len(resp.content) <= 10 * 1024 * 1024:
+                    encoded_string = base64.b64encode(resp.content).decode('utf-8')
                     # PHOTO property in vCard 3.0
                     lines.append(f"PHOTO;TYPE=JPEG;ENCODING=b:{encoded_string}")
         except Exception as e:
