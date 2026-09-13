@@ -7,10 +7,7 @@ import bcrypt
 import base64
 import requests
 import psycopg2
-from psycopg2.extensions import BYTES, register_type
 from psycopg2.extras import RealDictCursor
-
-register_type(BYTES)  # decode Postgres BYTEA as bytes, not memoryview (bcrypt needs bytes)
 from werkzeug.utils import secure_filename
 from urllib.parse import quote
 from flask import Flask, render_template, request, redirect, url_for, Response, abort, flash
