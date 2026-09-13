@@ -1,0 +1,178 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="header-row"
+    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; gap: 1rem; flex-wrap: wrap;">
+    <h1>📇 All Contacts</h1>
+    <a href="{{ url_for('index') }}" class="btn-primary"
+        style="text-decoration: none; padding: 0.6rem 1.2rem; display: flex; align-items: center; gap: 0.4rem; margin-top: 0; width: auto;">
+        ➕ New Contact
+    </a>
+</div>
+
+<div class="search-row" style="margin-bottom: 2rem;">
+    <form method="GET" class="search-form"
+        style="display: flex; gap: 0.75rem; background: #fff; padding: 0.5rem; border-radius: 12px; border: 1px solid var(--border-color); box-shadow: var(--glass-shadow); width: 100%; max-width: 600px;">
+        <input type="text" name="q" placeholder="Search contacts..." value="{{ search_query }}"
+            style="flex: 1; padding: 0.85rem 1.25rem; border: none; background: transparent; font-size: 1rem;">
+        <button type="submit" class="btn-primary"
+            style="margin-top: 0; padding: 0 1.5rem; width: auto; border-radius: 10px;">🔍 Search</button>
+        {% if search_query %}
+        <a href="{{ url_for('contacts_list') }}" class="btn-secondary"
+            style="padding: 0 1rem; text-decoration: none; display: flex; align-items: center; border-radius: 10px;">Clear</a>
+        {% endif %}
+    </form>
+</div>
+{% if contacts %}
+<div class="contact-grid">
+    {% for contact in contacts %}
+    <div class="contact-card">
+        {% if contact['file_path'] %}
+        <span class="card-badge-file">📄 Doc Attach</span>
+        {% endif %}
+
+        <div class="card-header">
+            {% if contact['profile_image'] %}
+            <img src="{{ url_for('static', filename=contact['profile_image']) }}" alt="Photo" class="card-avatar">
+            {% else %}
+            <div class="card-avatar-placeholder">👤</div>
+            {% endif %}
+
+            <div class="card-title-group">
+                <h3 class="card-name">{{ contact['first_name'] }} {{ contact['last_name'] }}</h3>
+                <span class="card-type">{{ contact['contact_type'] or 'Personal' }}</span>
+            </div>
+        </div>
+
+        <div class="card-body">
+            <div class="card-info-item">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path
+                        d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z">
+                    </path>
+                </svg>
+                {{ contact['phone'] }}
+            </div>
+
+            {% if contact['email'] %}
+            <div class="card-info-item">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                    <polyline points="22,6 12,13 2,6"></polyline>
+                </svg>
+                {{ contact['email'] }}
+            </div>
+            {% endif %}
+
+            {% if contact['company'] %}
+            <div class="card-info-item">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+                    <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+                </svg>
+                {{ contact['company'] }}{% if contact['job_title'] %} • {{ contact['job_title'] }}{% endif %}
+            </div>
+            {% endif %}
+
+            {% if contact['website'] %}
+            <div class="card-info-item">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="2" y1="12" x2="22" y2="12"></line>
+                    <path
+                        d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z">
+                    </path>
+                </svg>
+                <a href="{{ contact['website'] }}" target="_blank"
+                    style="color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{
+                    contact['website'] }}</a>
+            </div>
+            {% endif %}
+
+            {% if contact['file_path'] %}
+            <div class="card-info-item" style="margin-top: 0.5rem;">
+                <a href="{{ url_for('static', filename=contact['file_path']) }}" target="_blank"
+                    style="color: #22c55e; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem;">
+                    📄 View Attached Document
+                </a>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="card-footer">
+            <input type="hidden" id="url_{{ contact['id'] }}"
+                value="{{ url_for('contact_link', unique_id=contact['id'], _external=True) }}">
+            <button onclick="copyListUrl('{{ contact.id }}', event)" class="card-btn card-btn-copy">
+                🔗 Copy URL
+            </button>
+            <a href="{{ url_for('edit_contact', unique_id=contact.id) }}" class="card-btn card-btn-edit">
+                ✏️ Edit
+            </a>
+            <form action="{{ url_for('delete_contact', unique_id=contact.id, page=page, q=search_query) }}"
+                method="POST" style="display: contents;" onsubmit="return confirm('Delete this contact permanently?')">
+                <button type="submit" class="card-btn card-btn-delete">
+                    🗑️
+                </button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<div class="pagination"
+    style="display: flex; justify-content: center; gap: 1rem; margin-top: 2rem; align-items: center;">
+    {% if page > 1 %}
+    <a href="?page={{ page - 1 }}{% if search_query %}&q={{ search_query }}{% endif %}" class="btn-secondary"
+        style="text-decoration: none; padding: 0.5rem 1rem;">← Previous</a>
+    {% endif %}
+
+    <span class="page-info" style="color: var(--text-muted);">Page {{ page }} of {{ total_pages }}</span>
+
+    {% if page < total_pages %} <a href="?page={{ page + 1 }}{% if search_query %}&q={{ search_query }}{% endif %}"
+        class="btn-secondary" style="text-decoration: none; padding: 0.5rem 1rem;">Next →</a>
+        {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="empty-state">
+    <p style="font-size: 3rem; margin-bottom: 1rem;">📭</p>
+    <p style="color: var(--text-muted); margin-bottom: 1.5rem;">No contacts saved yet</p>
+    <a href="{{ url_for('index') }}" class="btn-primary">Create Your First Contact</a>
+</div>
+{% endif %}
+
+<style>
+    .empty-state {
+        text-align: center;
+        padding: 3rem 1rem;
+    }
+</style>
+
+<script>
+    function copyListUrl(id, event) {
+        const urlInput = document.getElementById('url_' + id);
+        if (!urlInput) return;
+        const url = urlInput.value;
+
+        navigator.clipboard.writeText(url).then(() => {
+            const btn = event.currentTarget || event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = "✅ Copied";
+            btn.style.color = "#22c55e";
+            setTimeout(() => {
+                btn.innerHTML = originalText;
+                btn.style.color = "var(--primary-color)";
+            }, 2000);
+        }).catch(err => {
+            console.error('Failed to copy: ', err);
+        });
+    }
+</script>
+{% endblock %}

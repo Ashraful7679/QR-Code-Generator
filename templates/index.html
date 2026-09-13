@@ -1,0 +1,192 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="glass-card">
+    <h1>Create Contact Link</h1>
+    <p class="subtitle">Generate a shareable link that saves directly to phone contacts.</p>
+
+    <form action="{{ url_for('create_contact') }}" method="POST" enctype="multipart/form-data">
+        <div class="form-group">
+            <label for="contact_type">Type</label>
+            <select id="contact_type" name="contact_type"
+                style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: var(--input-bg); color: var(--text-main);">
+                <option value="Personal">Personal</option>
+                <option value="Work">Work</option>
+                <option value="Other">Other</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="first_name">First Name *</label>
+            <input type="text" id="first_name" name="first_name" required placeholder="e.g. Jane">
+        </div>
+
+        <div class="form-group">
+            <label for="last_name">Last Name *</label>
+            <input type="text" id="last_name" name="last_name" required placeholder="e.g. Doe">
+        </div>
+
+        <div class="form-group">
+            <label for="phone">Phone Number *</label>
+            <input type="tel" id="phone" name="phone" required placeholder="e.g. +1 555 123 4567">
+        </div>
+
+        <div class="form-group">
+            <label for="mobile">Mobile Number</label>
+            <input type="tel" id="mobile" name="mobile" placeholder="e.g. +1 555 987 6543">
+        </div>
+
+        <div class="form-group">
+            <label for="email">Email Address</label>
+            <input type="email" id="email" name="email" placeholder="jane@example.com">
+        </div>
+
+        <div class="form-group">
+            <label for="company">Company</label>
+            <input type="text" id="company" name="company" placeholder="Acme Corp">
+        </div>
+
+        <div class="form-group">
+            <label for="job_title">Job Title</label>
+            <input type="text" id="job_title" name="job_title" placeholder="Product Manager">
+        </div>
+
+        <div class="form-group">
+            <label for="address">Address</label>
+            <input type="text" id="address" name="address" placeholder="123 Innovation Dr, Tech City">
+        </div>
+
+        <div class="form-group">
+            <label for="website">Website</label>
+            <input type="url" id="website" name="website" placeholder="https://example.com">
+        </div>
+
+        <div class="form-group">
+            <label for="profile_image">Contact Profile Image (Avatar)</label>
+            <input type="file" id="profile_image" accept=".jpg,.jpeg,.png">
+            <input type="hidden" name="cropped_image_base64" id="cropped_image_base64">
+            <div id="avatar-preview-container" style="display: none; margin-top: 10px;">
+                <p style="font-size: 0.8rem; color: var(--text-muted);">Preview:</p>
+                <img id="avatar-preview" src="#"
+                    style="width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 2px solid var(--primary-color);">
+            </div>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 5px;">This will be shown as the contact's
+                photo.</p>
+        </div>
+
+        <div class="form-group">
+            <label for="file">Attach PDF or Document</label>
+            <input type="file" id="file" name="file" accept=".pdf,.jpg,.jpeg,.png">
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 5px;">This file will be linked on your
+                contact page.</p>
+        </div>
+
+        <button type="submit" class="btn-primary">Generate Link</button>
+    </form>
+
+    <div style="margin-top: 2rem; text-align: center; border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
+        <a href="{{ url_for('contacts_list') }}" class="btn-secondary"
+            style="width: auto; margin: 0 auto; text-decoration: none;">
+            📇 View All Contacts
+        </a>
+    </div>
+</div>
+
+<!-- Cropping Modal -->
+<div id="cropperModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 style="margin: 0;">Crop Profile Image</h2>
+            <button type="button" class="close-modal"
+                style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>
+        </div>
+        <div class="modal-body">
+            <img id="cropper-image" src="">
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn-secondary" id="cancel-crop">Cancel</button>
+            <button type="button" class="btn-primary" id="save-crop" style="margin-top: 0;">Save Crop</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    let cropper;
+    const profileImageInput = document.getElementById('profile_image');
+    const cropperModal = document.getElementById('cropperModal');
+    const cropperImage = document.getElementById('cropper-image');
+    const croppedInput = document.getElementById('cropped_image_base64');
+    const previewContainer = document.getElementById('avatar-preview-container');
+    const previewImage = document.getElementById('avatar-preview');
+
+    profileImageInput.addEventListener('change', function (e) {
+        const files = e.target.files;
+        if (files && files.length > 0) {
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                cropperImage.src = e.target.result;
+                cropperModal.style.display = 'block';
+
+                if (cropper) {
+                    cropper.destroy();
+                }
+
+                cropper = new Cropper(cropperImage, {
+                    aspectRatio: 1,
+                    viewMode: 1,
+                    guides: true,
+                    background: false,
+                    autoCropArea: 0.8,
+                    responsive: true,
+                    checkOrientation: false,
+                    cropBoxMovable: true,
+                    cropBoxResizable: true,
+                    toggleDragModeOnDblclick: false,
+                });
+            };
+            reader.readAsDataURL(files[0]);
+        }
+    });
+
+    document.getElementById('save-crop').addEventListener('click', function () {
+        const canvas = cropper.getCroppedCanvas({
+            width: 500,
+            height: 500,
+        });
+
+        // Create a circular crop from the squared canvas
+        const circularCanvas = document.createElement('canvas');
+        circularCanvas.width = 500;
+        circularCanvas.height = 500;
+        const ctx = circularCanvas.getContext('2d');
+
+        ctx.beginPath();
+        ctx.arc(250, 250, 250, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(canvas, 0, 0, 500, 500);
+
+        const base64Image = circularCanvas.toDataURL('image/png');
+        croppedInput.value = base64Image;
+        previewImage.src = base64Image;
+        previewContainer.style.display = 'block';
+        cropperModal.style.display = 'none';
+    });
+
+    document.getElementById('cancel-crop').addEventListener('click', function () {
+        cropperModal.style.display = 'none';
+        profileImageInput.value = '';
+    });
+
+    document.querySelector('.close-modal').addEventListener('click', function () {
+        cropperModal.style.display = 'none';
+        profileImageInput.value = '';
+    });
+
+    window.onclick = function (event) {
+        if (event.target == cropperModal) {
+            cropperModal.style.display = 'none';
+            profileImageInput.value = '';
+        }
+    };
+</script>
+{% endblock %}

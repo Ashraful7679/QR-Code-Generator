@@ -1,0 +1,168 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="glass-card scan-container">
+    <h1>📱 Scan to Save Contact</h1>
+    <p class="subtitle">{{ contact['first_name'] }} {{ contact['last_name'] }}</p>
+
+    <!-- Instructions -->
+    <div class="instructions">
+        <p><strong>How to save this contact:</strong></p>
+        <ol>
+            <li>Open your phone's camera app</li>
+            <li>Point it at the QR code below</li>
+            <li>Tap the notification to add contact</li>
+        </ol>
+    </div>
+
+    <!-- vCard QR Code -->
+    <div class="qr-display">
+        <img src="{{ vcard_qr_url }}" alt="Contact QR Code" class="qr-code-large">
+        <p class="qr-hint">📸 Scan with your phone camera</p>
+    </div>
+
+    <!-- Contact Preview -->
+    <div class="contact-preview">
+        <h3>Contact Information</h3>
+        <div class="preview-grid">
+            <div class="preview-item">
+                <span class="icon">👤</span>
+                <span>{{ contact['first_name'] }} {{ contact['last_name'] }}</span>
+            </div>
+            <div class="preview-item">
+                <span class="icon">📱</span>
+                <span>{{ contact['phone'] }}</span>
+            </div>
+            {% if contact['email'] %}
+            <div class="preview-item">
+                <span class="icon">📧</span>
+                <span>{{ contact['email'] }}</span>
+            </div>
+            {% endif %}
+            {% if contact['company'] %}
+            <div class="preview-item">
+                <span class="icon">🏢</span>
+                <span>{{ contact['company'] }}</span>
+            </div>
+            {% endif %}
+            {% if contact['job_title'] %}
+            <div class="preview-item">
+                <span class="icon">💼</span>
+                <span>{{ contact['job_title'] }}</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Alternative Download -->
+    <div class="alternative-actions">
+        <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">
+            Can't scan? Download the contact file:
+        </p>
+        <a href="{{ download_url }}" class="btn-secondary" style="text-decoration: none;">
+            📥 Download vCard File
+        </a>
+    </div>
+</div>
+
+<style>
+    .scan-container {
+        max-width: 600px;
+        margin: 0 auto;
+        text-align: center;
+    }
+
+    .instructions {
+        background: rgba(59, 130, 246, 0.1);
+        border: 1px solid rgba(59, 130, 246, 0.3);
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin: 1.5rem 0;
+        text-align: left;
+    }
+
+    .instructions ol {
+        margin: 0.75rem 0 0 1.25rem;
+        padding: 0;
+        color: var(--text-muted);
+        line-height: 1.8;
+    }
+
+    .qr-display {
+        background: white;
+        border-radius: 16px;
+        padding: 2rem;
+        margin: 2rem 0;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    }
+
+    .qr-code-large {
+        max-width: 350px;
+        width: 100%;
+        height: auto;
+        border-radius: 8px;
+    }
+
+    .qr-hint {
+        margin-top: 1rem;
+        color: #666;
+        font-size: 0.9rem;
+        font-weight: 500;
+    }
+
+    .contact-preview {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin: 2rem 0;
+    }
+
+    .contact-preview h3 {
+        margin: 0 0 1rem 0;
+        font-size: 1rem;
+        color: var(--text-main);
+    }
+
+    .preview-grid {
+        display: grid;
+        gap: 0.75rem;
+    }
+
+    .preview-item {
+        display: flex;
+        align-items: center;
+        padding: 0.75rem;
+        background: rgba(255, 255, 255, 0.02);
+        border-radius: 8px;
+        text-align: left;
+    }
+
+    .preview-item .icon {
+        font-size: 1.2rem;
+        margin-right: 1rem;
+        min-width: 30px;
+    }
+
+    .preview-item span:last-child {
+        color: var(--text-muted);
+        font-size: 0.95rem;
+    }
+
+    .alternative-actions {
+        margin-top: 2rem;
+        padding-top: 2rem;
+        border-top: 1px solid var(--border-color);
+    }
+
+    @media (max-width: 768px) {
+        .qr-code-large {
+            max-width: 280px;
+        }
+
+        .qr-display {
+            padding: 1.5rem;
+        }
+    }
+</style>
+{% endblock %}

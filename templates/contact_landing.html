@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="glass-card">
+    <h1>{{ contact['first_name'] }} {{ contact['last_name'] }}</h1>
+    <p class="subtitle">Save this contact to your device</p>
+
+    <!-- Contact Details -->
+    <div class="contact-details">
+        <div class="detail-item">
+            <span class="detail-icon">📱</span>
+            <span class="detail-text">{{ contact['phone'] }}</span>
+        </div>
+
+        {% if contact['email'] %}
+        <div class="detail-item">
+            <span class="detail-icon">📧</span>
+            <span class="detail-text">{{ contact['email'] }}</span>
+        </div>
+        {% endif %}
+
+        {% if contact['company'] %}
+        <div class="detail-item">
+            <span class="detail-icon">🏢</span>
+            <span class="detail-text">{{ contact['company'] }}</span>
+        </div>
+        {% endif %}
+
+        {% if contact['job_title'] %}
+        <div class="detail-item">
+            <span class="detail-icon">💼</span>
+            <span class="detail-text">{{ contact['job_title'] }}</span>
+        </div>
+        {% endif %}
+
+        {% if contact['address'] %}
+        <div class="detail-item">
+            <span class="detail-icon">📍</span>
+            <span class="detail-text">{{ contact['address'] }}</span>
+        </div>
+        {% endif %}
+
+        {% if contact['website'] %}
+        <div class="detail-item">
+            <span class="detail-icon">🌐</span>
+            <span class="detail-text">
+                <a href="{{ contact['website'] }}" target="_blank" style="color: var(--primary-color);">
+                    {{ contact['website'] }}
+                </a>
+            </span>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Action Buttons -->
+    <div style="margin-top: 2rem;">
+        <a href="{{ google_url }}" class="btn-primary"
+            style="display: block; text-align: center; text-decoration: none; margin-bottom: 0.75rem;">
+            🤖 Open in Google Contacts
+        </a>
+
+        <a href="{{ download_url }}" class="btn-secondary"
+            style="display: block; text-align: center; text-decoration: none;">
+            📥 Download vCard File
+        </a>
+    </div>
+
+    <!-- Edit Link -->
+    <div style="margin-top: 2rem; text-align: center;">
+        <a href="{{ url_for('edit_contact', unique_id=unique_id) }}"
+            style="color: var(--text-muted); text-decoration: none; font-size: 0.9rem; opacity: 0.8;">
+            ✏️ Edit Contact Info
+        </a>
+    </div>
+</div>
+
+<style>
+    .contact-details {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin: 1.5rem 0;
+    }
+
+    .detail-item {
+        display: flex;
+        align-items: center;
+        padding: 0.75rem 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .detail-item:last-child {
+        border-bottom: none;
+    }
+
+    .detail-icon {
+        font-size: 1.2rem;
+        margin-right: 1rem;
+        min-width: 30px;
+    }
+
+    .detail-text {
+        color: var(--text-main);
+        font-size: 0.95rem;
+        word-break: break-word;
+    }
+</style>
+{% endblock %}

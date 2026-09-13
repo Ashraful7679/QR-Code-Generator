@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Contact Link Generator{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+    <div class="container">
+        {% if request.endpoint != 'contact_link' %}
+        <div class="sticky-top">
+            <header class="main-header">
+                <img src="{{ url_for('static', filename='favicon.svg') }}" alt="Logo">
+            </header>
+
+            {% if current_user.is_authenticated %}
+            <nav class="navbar">
+                <div class="nav-links">
+                    <a href="{{ url_for('contacts_list') }}">📇 Contacts</a>
+                    <a href="{{ url_for('index') }}">🏠 Add New</a>
+
+                    {% if current_user.is_admin %}
+                    <a href="{{ url_for('users_list') }}">👥 Users</a>
+                    {% endif %}
+                </div>
+                <div class="user-meta">
+                    <span class="username">👤 {{ current_user.username }}</span>
+                    <a href="{{ url_for('logout') }}" class="btn-logout">Logout</a>
+                </div>
+            </nav>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <main class="main-content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+    <script>
+        // Simple client-side validation enhancement
+        document.querySelectorAll('input[required]').forEach(input => {
+            input.addEventListener('invalid', e => {
+                input.classList.add('error');
+            });
+        });
+    </script>
+</body>
+
+</html>
