@@ -592,8 +592,8 @@ def bulk_import():
         return redirect(url_for('bulk_import'))
     conn = get_db_connection()
     remaining = quota_remaining(conn, current_user.id)
-    valid_rows = [row for row in rows if row.get(mapping['first_name'], '').strip()
-                  and row.get(mapping['last_name'], '').strip() and row.get(mapping['phone'], '').strip()]
+    valid_rows = [row for row in rows if (row.get(mapping['first_name']) or '').strip()
+                  and (row.get(mapping['last_name']) or '').strip() and (row.get(mapping['phone']) or '').strip()]
     if not current_user.is_admin and len(valid_rows) > remaining:
         conn.close()
         flash(f'Not enough quota for this upload. You can add {remaining} more contact(s). Contact hello@brainyflavors.com to request a higher quota.')
@@ -601,7 +601,7 @@ def bulk_import():
     imported = 0
     try:
         for row in valid_rows:
-            values = {field: (row.get(mapping.get(field, ''), '').strip() if mapping.get(field) else '') for field, _ in fields}
+            values = {field: ((row.get(mapping.get(field, '')) or '').strip() if mapping.get(field) else '') for field, _ in fields}
             unique_id = uuid.uuid4().hex[:10]
             conn.execute('''INSERT INTO contacts
                 (id, first_name, last_name, phone, email, company, job_title, address, website, contact_type, mobile, user_id)
