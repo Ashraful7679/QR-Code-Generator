@@ -78,6 +78,7 @@
                 style="background: white; padding: 1.5rem; border-radius: 20px; display: inline-block; border: 1px solid var(--border-color); box-shadow: var(--glass-shadow);">
                 <img src="{{ url_for('qr_code', unique_id=contact.id) }}" alt="Contact QR Code" class="qr-image"
                     style="width: 200px; height: 200px; display: block;">
+                <a href="{{ url_for('qr_code', unique_id=contact.id, download=1) }}" class="btn-secondary" style="display:block;margin-top:1rem;text-decoration:none;padding:.75rem 1rem;">⬇️ Download QR Code (PNG)</a>
             </div>
         </div>
 
