@@ -628,8 +628,8 @@ def contacts_list():
 @login_required
 def bulk_import():
     fields = [
-        ('first_name', 'First Name (required)'), ('last_name', 'Last Name (required)'),
-        ('phone', 'Phone (required)'), ('mobile', 'Mobile'), ('email', 'Email'),
+        ('first_name', 'First Name (required)'), ('last_name', 'Last Name'),
+        ('phone', 'Phone'), ('mobile', 'Mobile'), ('email', 'Email'),
         ('company', 'Company'), ('job_title', 'Job Title'), ('address', 'Address'),
         ('website', 'Website'), ('contact_type', 'Contact Type')
     ]
@@ -679,13 +679,13 @@ def bulk_import():
         flash('Invalid CSV data. Please upload the file again.')
         return redirect(url_for('bulk_import'))
     mapping = {key: request.form.get('map_' + key, '') for key, _ in fields}
-    if not all(mapping.get(key) for key in ('first_name', 'last_name', 'phone')):
-        flash('Map First Name, Last Name and Phone before importing.')
+    if not mapping.get('first_name'):
+        flash('Map the First Name column before importing.')
         return redirect(url_for('bulk_import'))
     conn = get_db_connection()
     remaining = quota_remaining(conn, current_user.id)
-    valid_rows = [row for row in rows if (row.get(mapping['first_name']) or '').strip()
-                  and (row.get(mapping['last_name']) or '').strip() and (row.get(mapping['phone']) or '').strip()]
+    # Only First Name is mandatory. All other fields may be blank or unmapped.
+    valid_rows = [row for row in rows if (row.get(mapping['first_name']) or '').strip()]
     if not current_user.is_admin and len(valid_rows) > remaining:
         conn.close()
         flash(f'Not enough quota for this upload. You can add {remaining} more contact(s). Contact hello@brainyflavors.com to request a higher quota.')
