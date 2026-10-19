@@ -5,6 +5,7 @@
     style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; gap: 1rem; flex-wrap: wrap;">
     <h1>📇 Contacts</h1>
     <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+        <a href="{{ url_for('bulk_import') }}" class="btn-secondary" style="text-decoration:none;padding:.6rem 1rem;">⬆️ Import CSV</a>
         {% if current_user.is_admin %}
         <form method="GET" style="display: flex; gap: 0.5rem; align-items: center;">
             <select name="user" onchange="this.form.submit()"
@@ -24,6 +25,16 @@
     </div>
 </div>
 
+{% if not current_user.is_admin %}
+<div style="margin:0 0 1.5rem;padding:1rem 1.25rem;border-radius:12px;border:1px solid var(--border-color);background:rgba(59,130,246,.08);">
+  <strong>Contact quota:</strong> {{ own_total }} / {{ own_quota }} used.
+  {% if own_total >= own_quota %}
+  <p style="margin:.5rem 0 0;color:#b91c1c;">Your free contact quota is finished. To request a higher quota, contact <a href="mailto:hello@brainyflavors.com">hello@brainyflavors.com</a>.</p>
+  {% else %}
+  <span>{{ own_quota - own_total }} contact(s) remaining.</span>
+  {% endif %}
+</div>
+{% endif %}
 <div class="search-row" style="margin-bottom: 2rem;">
     <form method="GET" class="search-form"
         style="display: flex; gap: 0.75rem; background: #fff; padding: 0.5rem; border-radius: 12px; border: 1px solid var(--border-color); box-shadow: var(--glass-shadow); width: 100%; max-width: 600px;">
@@ -110,6 +121,13 @@
 
         </div>
 
+        <div style="display:flex;align-items:center;gap:1rem;padding:.9rem 1rem;border-top:1px solid var(--border-color);background:#f8fafc;">
+            <img src="{{ url_for('qr_code', unique_id=contact['id']) }}" alt="QR code for {{ contact['first_name'] }} {{ contact['last_name'] }}" loading="lazy" style="width:88px;height:88px;object-fit:contain;background:white;border:1px solid #e2e8f0;border-radius:8px;">
+            <div style="display:flex;flex-direction:column;gap:.5rem;">
+                <strong style="font-size:.9rem;">Contact QR Code</strong>
+                <a href="{{ url_for('qr_code', unique_id=contact['id'], download=1) }}" class="card-btn card-btn-copy" style="text-decoration:none;text-align:center;">⬇️ Download QR PNG</a>
+            </div>
+        </div>
         <div class="card-footer">
             <input type="hidden" id="url_{{ contact['id'] }}"
                 value="{{ url_for('contact_link', unique_id=contact['id'], _external=True) }}">
