@@ -974,7 +974,8 @@ def contact_link(unique_id):
     if not contact:
         abort(404)
     
-    return render_template('mobile_contact.html', contact=dict(contact))
+    contact_url = url_for('contact_link', unique_id=unique_id, _external=True)
+    return render_template('mobile_contact.html', contact=dict(contact), contact_url=contact_url)
 
 @app.route('/download/<unique_id>')
 def download_vcard_fallback(unique_id):
