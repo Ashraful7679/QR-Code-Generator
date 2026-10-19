@@ -1,4 +1,5 @@
 import sqlite3
+import csv
 import uuid
 import os
 import io
@@ -158,6 +159,14 @@ def init_db():
             pass  # column already exists
 
     # Backfill owner for contacts created before ownership existed (first user = admin)
+    # Per-user contact quota; default free quota is 10.
+    if USE_POSTGRES:
+        conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_quota INTEGER NOT NULL DEFAULT 10')
+    else:
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN contact_quota INTEGER NOT NULL DEFAULT 10')
+        except sqlite3.OperationalError:
+            pass
     conn.execute('UPDATE contacts SET user_id = (SELECT id FROM users ORDER BY id LIMIT 1) WHERE user_id IS NULL')
 
     conn.commit()
@@ -426,9 +435,19 @@ def delete_user(user_id):
     return redirect(url_for('users_list'))
 
 @app.route('/', methods=['GET'])
-@login_required
 def index():
+    # Public landing page makes every shared contact link a way back to the app.
+    if not current_user.is_authenticated:
+        return render_template('home.html')
     return render_template('index.html')
+
+def get_contact_usage(conn, user_id):
+    return conn.execute('SELECT COUNT(*) AS total FROM contacts WHERE user_id = ?', (user_id,)).fetchone()['total']
+
+def quota_remaining(conn, user_id):
+    row = conn.execute('SELECT contact_quota FROM users WHERE id = ?', (user_id,)).fetchone()
+    quota = int(row['contact_quota'] if row and row['contact_quota'] is not None else 10)
+    return max(0, quota - get_contact_usage(conn, user_id))
 
 
 
@@ -475,11 +494,16 @@ def contacts_list():
     if current_user.is_admin:
         users = conn.execute('SELECT id, username FROM users ORDER BY username').fetchall()
 
+    own_total = get_contact_usage(conn, current_user.id) if not current_user.is_admin else None
+    own_quota_row = conn.execute('SELECT contact_quota FROM users WHERE id = ?', (current_user.id,)).fetchone()
+    own_quota = int(own_quota_row['contact_quota'] if own_quota_row and own_quota_row['contact_quota'] is not None else 10)
     conn.close()
 
     total_pages = (total + per_page - 1) // per_page
 
     return render_template('contacts.html',
+                         own_total=own_total,
+                         own_quota=own_quota,
                          contacts=contacts,
                          page=page,
                          total_pages=total_pages,
@@ -488,6 +512,93 @@ def contacts_list():
                          user_filter=user_filter)
 
 
+
+@app.route('/bulk-import', methods=['GET', 'POST'])
+@login_required
+def bulk_import():
+    fields = [
+        ('first_name', 'First Name (required)'), ('last_name', 'Last Name (required)'),
+        ('phone', 'Phone (required)'), ('mobile', 'Mobile'), ('email', 'Email'),
+        ('company', 'Company'), ('job_title', 'Job Title'), ('address', 'Address'),
+        ('website', 'Website'), ('contact_type', 'Contact Type')
+    ]
+    if request.method == 'GET':
+        conn = get_db_connection()
+        used = get_contact_usage(conn, current_user.id)
+        user_row = conn.execute('SELECT contact_quota FROM users WHERE id = ?', (current_user.id,)).fetchone()
+        quota = int(user_row['contact_quota'] if user_row and user_row['contact_quota'] is not None else 10)
+        conn.close()
+        return render_template('bulk_import.html', fields=fields, used=used, quota=quota)
+
+    csv_data = request.form.get('csv_data', '')
+    mapping_submitted = request.form.get('mapping_submitted') == '1'
+    if not mapping_submitted:
+        upload = request.files.get('csv_file')
+        if not upload or not upload.filename.lower().endswith('.csv'):
+            flash('Please choose a CSV file.')
+            return redirect(url_for('bulk_import'))
+        raw = upload.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
+            flash('CSV file is too large. Maximum file size is 2 MB.')
+            return redirect(url_for('bulk_import'))
+        try:
+            csv_data = raw.decode('utf-8-sig')
+            reader = csv.DictReader(io.StringIO(csv_data))
+            headers = reader.fieldnames or []
+            rows = list(reader)
+        except (UnicodeDecodeError, csv.Error):
+            flash('Could not read this CSV. Save it as UTF-8 CSV and try again.')
+            return redirect(url_for('bulk_import'))
+        if not headers or not rows:
+            flash('The CSV file has no headers or no contact rows.')
+            return redirect(url_for('bulk_import'))
+        conn = get_db_connection()
+        used = get_contact_usage(conn, current_user.id)
+        user_row = conn.execute('SELECT contact_quota FROM users WHERE id = ?', (current_user.id,)).fetchone()
+        quota = int(user_row['contact_quota'] if user_row and user_row['contact_quota'] is not None else 10)
+        conn.close()
+        return render_template('bulk_import.html', fields=fields, headers=headers, csv_data=csv_data,
+                               row_count=len(rows), mapping_mode=True, used=used, quota=quota)
+
+    try:
+        reader = csv.DictReader(io.StringIO(csv_data))
+        rows = list(reader)
+        headers = reader.fieldnames or []
+    except csv.Error:
+        flash('Invalid CSV data. Please upload the file again.')
+        return redirect(url_for('bulk_import'))
+    mapping = {key: request.form.get('map_' + key, '') for key, _ in fields}
+    if not all(mapping.get(key) for key in ('first_name', 'last_name', 'phone')):
+        flash('Map First Name, Last Name and Phone before importing.')
+        return redirect(url_for('bulk_import'))
+    conn = get_db_connection()
+    remaining = quota_remaining(conn, current_user.id)
+    valid_rows = [row for row in rows if row.get(mapping['first_name'], '').strip()
+                  and row.get(mapping['last_name'], '').strip() and row.get(mapping['phone'], '').strip()]
+    if not current_user.is_admin and len(valid_rows) > remaining:
+        conn.close()
+        flash(f'Not enough quota for this upload. You can add {remaining} more contact(s). Contact hello@brainyflavors.com to request a higher quota.')
+        return redirect(url_for('bulk_import'))
+    imported = 0
+    try:
+        for row in valid_rows:
+            values = {field: (row.get(mapping.get(field, ''), '').strip() if mapping.get(field) else '') for field, _ in fields}
+            unique_id = uuid.uuid4().hex[:10]
+            conn.execute('''INSERT INTO contacts
+                (id, first_name, last_name, phone, email, company, job_title, address, website, contact_type, mobile, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (unique_id, values['first_name'], values['last_name'], values['phone'], values['email'] or None,
+                 values['company'] or None, values['job_title'] or None, values['address'] or None,
+                 values['website'] or None, values['contact_type'] or 'Personal', values['mobile'] or None, current_user.id))
+            imported += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    flash(f'Successfully imported {imported} contact(s). Rows missing required fields were skipped.')
+    return redirect(url_for('contacts_list'))
 
 @app.route('/fetch-image')
 @login_required
@@ -515,6 +626,12 @@ def fetch_image():
 @app.route('/create', methods=['POST'])
 @login_required
 def create_contact():
+    conn = get_db_connection()
+    if not current_user.is_admin and quota_remaining(conn, current_user.id) <= 0:
+        conn.close()
+        flash('Your free contact quota is finished. Contact hello@brainyflavors.com to request a higher quota.')
+        return redirect(url_for('contacts_list'))
+    conn.close()
     first_name = request.form.get('first_name')
     last_name = request.form.get('last_name')
     phone = request.form.get('phone')
@@ -922,11 +1039,12 @@ def qr_code(unique_id):
     img.save(img_io, 'PNG')
     img_io.seek(0)
     
+    disposition = 'attachment' if request.args.get('download') == '1' else 'inline'
     return Response(
         img_io.getvalue(),
         mimetype='image/png',
         headers={
-            'Content-Disposition': f'inline; filename="contact_qr_{unique_id}.png"',
+            'Content-Disposition': f'{disposition}; filename="contact_qr_{unique_id}.png"',
             'Cache-Control': 'no-store, no-cache, must-revalidate'
         }
     )
