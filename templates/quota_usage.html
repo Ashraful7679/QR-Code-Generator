@@ -31,7 +31,7 @@
   {% else %}
     {% for user in user_stats %}
     <div class="quota-stat"><div class="stat-label">Contacts created</div><div class="stat-value">{{ user.total }}</div></div>
-    <div class="quota-stat"><div class="stat-label">Contact quota</div><div class="stat-value">Unlimited</div></div>
+    <div class="quota-stat"><div class="stat-label">Contact quota</div><div class="stat-value">{% if user.is_admin %}Unlimited{% else %}{{ user.quota }}{% endif %}</div></div>
     {% if not user.is_admin %}
     <div class="quota-stat"><div class="stat-label">Contacts remaining</div><div class="stat-value">{{ user.remaining }}</div></div>
     <div class="quota-stat"><div class="stat-label">Quota used</div><div class="stat-value">{{ user.percent }}%</div></div>
