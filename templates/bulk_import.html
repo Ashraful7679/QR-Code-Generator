@@ -20,7 +20,7 @@
   {% endif %}
   {% if mapping_mode %}
   <h2 style="font-size:1.2rem;">Step 2: Map CSV columns</h2>
-  <p class="subtitle">Found {{ row_count }} row(s). Choose the source column for each field. First Name, Last Name and Phone are required.</p>
+  <p class="subtitle">Found {{ row_count }} row(s). Choose the source column for each field. Only First Name is required; all other fields are optional.</p>
   <form method="POST">
     <input type="hidden" name="mapping_submitted" value="1">
     <textarea name="csv_data" hidden>{{ csv_data }}</textarea>
@@ -45,7 +45,7 @@
   <form method="POST" enctype="multipart/form-data" style="padding:1.5rem;border:1px dashed var(--border-color);border-radius:12px;">
     <label for="csv_file">CSV file (maximum 2 MB)</label>
     <input type="file" id="csv_file" name="csv_file" accept=".csv,text/csv" required>
-    <p class="subtitle">Use a header row. You can map columns on the next screen. Rows without First Name, Last Name or Phone will be skipped.</p>
+    <p class="subtitle">Use a header row. You can map columns on the next screen. Only rows without First Name will be skipped. Last Name, Phone, Email and all other fields are optional.</p>
     <button type="submit" class="btn-primary" style="width:auto;padding:.85rem 1.2rem;">Upload and Map Columns →</button>
   </form>
   {% endif %}
