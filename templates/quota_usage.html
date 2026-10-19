@@ -1,0 +1,93 @@
+{% extends 'base.html' %}
+{% block title %}Quota Usage Dashboard{% endblock %}
+{% block content %}
+<style>
+.quota-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1rem;margin:1.25rem 0 1.75rem}
+.quota-stat{padding:1.1rem 1.2rem;border:1px solid var(--border-color);border-radius:14px;background:var(--card-bg,rgba(255,255,255,.75))}
+.quota-stat .stat-label{font-size:.85rem;color:var(--text-muted);margin-bottom:.4rem}
+.quota-stat .stat-value{font-size:1.8rem;font-weight:700;line-height:1.2}
+.quota-panel{padding:1.25rem;border:1px solid var(--border-color);border-radius:14px;margin:1.25rem 0;background:var(--card-bg,rgba(255,255,255,.75))}
+.quota-table-wrap{overflow-x:auto}
+.quota-table{width:100%;border-collapse:collapse;min-width:640px}
+.quota-table th,.quota-table td{text-align:left;padding:.8rem;border-bottom:1px solid var(--border-color);white-space:nowrap}
+.quota-progress{height:8px;border-radius:99px;background:#e2e8f0;overflow:hidden;min-width:90px}
+.quota-progress span{display:block;height:100%;border-radius:99px;background:#2563eb}
+.quota-chart{display:grid;grid-template-columns:repeat(30,minmax(5px,1fr));align-items:end;gap:4px;height:150px;padding:.5rem 0}
+.quota-chart-item{display:flex;height:100%;align-items:end;justify-content:center}
+.quota-chart-bar{width:100%;min-height:4px;background:#3b82f6;border-radius:4px 4px 0 0}
+.quota-chart-labels{display:flex;justify-content:space-between;color:var(--text-muted);font-size:.8rem}
+@media(max-width:600px){.quota-panel{padding:.85rem}.quota-chart{gap:2px;height:110px}}
+</style>
+<div class="header-row" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
+  <div><h1>📊 Quota Usage Dashboard</h1><p class="subtitle">{% if is_admin %}Monitor contact usage across users and review quota changes.{% else %}Track your contact quota and recent contact creation activity.{% endif %}</p></div>
+  <a href="{{ url_for('contacts_list') }}" class="btn-secondary" style="text-decoration:none;padding:.65rem 1rem;">← Contacts</a>
+</div>
+<div class="quota-grid">
+  {% if is_admin %}
+  <div class="quota-stat"><div class="stat-label">Registered users</div><div class="stat-value">{{ total_users }}</div></div>
+  <div class="quota-stat"><div class="stat-label">Contacts across all users</div><div class="stat-value">{{ total_contacts }}</div></div>
+  <div class="quota-stat"><div class="stat-label">Total assigned quota</div><div class="stat-value">{{ total_quota }}</div></div>
+  <div class="quota-stat"><div class="stat-label">Non-admin users</div><div class="stat-value">{{ user_stats | selectattr('is_admin', 'equalto', false) | list | length }}</div></div>
+  {% else %}
+    {% for user in user_stats %}
+    <div class="quota-stat"><div class="stat-label">Contacts created</div><div class="stat-value">{{ user.total }}</div></div>
+    <div class="quota-stat"><div class="stat-label">Contact quota</div><div class="stat-value">Unlimited</div></div>
+    {% if not user.is_admin %}
+    <div class="quota-stat"><div class="stat-label">Contacts remaining</div><div class="stat-value">{{ user.remaining }}</div></div>
+    <div class="quota-stat"><div class="stat-label">Quota used</div><div class="stat-value">{{ user.percent }}%</div></div>
+    {% endif %}
+    {% endfor %}
+  {% endif %}
+</div>
+<div class="quota-panel">
+  <h2 style="margin-top:0;font-size:1.2rem;">Contact creation activity</h2>
+  <p class="subtitle">Daily contacts created over the last 30 days ({{ start_day }} to {{ today }}).</p>
+  <div class="quota-chart" role="img" aria-label="Daily contact creation chart for the last 30 days">
+    {% for item in chart %}
+    <div class="quota-chart-item" title="{{ item.day }}: {{ item.count }} contact(s)">
+      <div class="quota-chart-bar" style="height:{{ item.height }}%;opacity:{{ 0.35 + (item.height / 160) }};"></div>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="quota-chart-labels"><span>{{ start_day }}</span><span>{{ today }}</span></div>
+</div>
+{% if is_admin %}
+<div class="quota-panel">
+  <h2 style="margin-top:0;font-size:1.2rem;">User quota breakdown</h2>
+  <div class="quota-table-wrap"><table class="quota-table">
+    <thead><tr><th>User</th><th>Role</th><th>Contacts</th><th>Quota</th><th>Usage</th><th>Remaining</th></tr></thead>
+    <tbody>{% for user in user_stats %}
+      <tr>
+        <td>{{ user.username }}</td><td>{% if user.is_admin %}Admin{% else %}User{% endif %}</td>
+        <td>{{ user.total }}</td><td>{% if user.is_admin %}Unlimited{% else %}{{ user.quota }}{% endif %}</td>
+        <td>{% if user.is_admin %}—{% else %}<div style="display:flex;align-items:center;gap:.6rem;"><div class="quota-progress"><span style="width:{{ user.percent }}%;"></span></div><small>{{ user.percent }}%</small></div>{% endif %}</td>
+        <td>{% if user.is_admin %}Unlimited{% else %}{{ user.remaining }}{% endif %}</td>
+      </tr>
+    {% endfor %}</tbody>
+  </table></div>
+  <p class="subtitle" style="margin-bottom:0;">To adjust a user's limit, open <a href="{{ url_for('users_list') }}">User Management</a>.</p>
+</div>
+<div class="quota-panel">
+  <h2 style="margin-top:0;font-size:1.2rem;">Recent quota changes</h2>
+  {% if audit_rows %}
+  <div class="quota-table-wrap"><table class="quota-table">
+    <thead><tr><th>Date</th><th>Changed by</th><th>User</th><th>Previous quota</th><th>New quota</th></tr></thead>
+    <tbody>{% for audit in audit_rows %}
+      <tr><td>{{ audit.changed_at | fmt_date }}</td><td>{{ audit.admin_username or 'Unknown' }}</td><td>{{ audit.target_username or 'Deleted user' }}</td><td>{{ audit.old_quota }}</td><td>{{ audit.new_quota }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="subtitle">No quota changes have been recorded yet.</p>{% endif %}
+</div>
+{% else %}
+<div class="quota-panel">
+  <h2 style="margin-top:0;font-size:1.2rem;">Your quota status</h2>
+  {% for user in user_stats %}
+  {% if not user.is_admin %}
+  <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-bottom:.7rem;"><strong>{{ user.total }} of {{ user.quota }} contacts used</strong><span>{{ user.remaining }} remaining</span></div>
+  <div class="quota-progress" style="height:12px;"><span style="width:{{ user.percent }}%;"></span></div>
+  {% if user.remaining == 0 %}<p style="margin-top:1rem;">Your contact quota is finished. Contact <a href="mailto:hello@brainyflavors.com">hello@brainyflavors.com</a> to request a higher quota.</p>{% endif %}
+  {% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
