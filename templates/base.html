@@ -14,7 +14,7 @@
 
 <body>
     <div class="container">
-        {% if request.endpoint != 'contact_link' %}
+        
         <div class="sticky-top">
             <header class="main-header">
                 <img src="{{ url_for('static', filename='favicon.svg') }}" alt="Logo">
@@ -38,7 +38,16 @@
             </nav>
             {% endif %}
         </div>
-        {% endif %}
+            {% else %}
+            <nav class="navbar">
+                <div class="nav-links">
+                    <a href="{{ url_for('index') }}">🏠 Home</a>
+                    <a href="{{ url_for('signup') }}">📝 Create Account</a>
+                    <a href="{{ url_for('login') }}">🔐 Login</a>
+                </div>
+            </nav>
+            {% endif %}
+        </div>
 
         <main class="main-content">
             {% block content %}{% endblock %}
