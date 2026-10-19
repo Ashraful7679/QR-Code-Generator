@@ -567,7 +567,7 @@ def quota_remaining(conn, user_id):
 def contacts_list():
     """Display saved contacts with search and pagination.
     Regular users only see their own contacts; admins see all."""
-    search_query = request.args.get('q', '')
+    search_query = request.args.get('q', '').strip()
     page = request.args.get('page', 1, type=int)
     per_page = 12
 
@@ -581,8 +581,20 @@ def contacts_list():
         where.append('c.user_id = ?')
         params.append(user_filter)
     if search_query:
-        where.append('(c.first_name LIKE ? OR c.last_name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR c.company LIKE ?)')
-        params.extend([f'%{search_query}%'] * 5)
+        # Search every contact field, case-insensitively, while keeping the
+        # current user's ownership filter and admin user filter intact.
+        searchable_fields = [
+            'c.id', 'c.first_name', 'c.last_name', 'c.phone', 'c.mobile',
+            'c.email', 'c.company', 'c.job_title', 'c.address', 'c.website',
+            'c.contact_type', 'c.file_path', 'c.profile_image', 'c.short_url',
+            'CAST(c.created_at AS TEXT)', 'u.username'
+        ]
+        search_clauses = [
+            f"LOWER(COALESCE({field}, '')) LIKE LOWER(?)"
+            for field in searchable_fields
+        ]
+        where.append('(' + ' OR '.join(search_clauses) + ')')
+        params.extend([f'%{search_query}%'] * len(searchable_fields))
     where_sql = 'WHERE ' + ' AND '.join(where) if where else ''
 
     conn = get_db_connection()
