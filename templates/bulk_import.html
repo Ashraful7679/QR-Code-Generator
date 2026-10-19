@@ -1,0 +1,53 @@
+{% extends 'base.html' %}
+{% block title %}Bulk Contact Import{% endblock %}
+{% block content %}
+<div class="glass-card" style="max-width:920px;margin:1rem auto;">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
+    <div><h1>⬆️ Bulk Contact Import</h1><p class="subtitle">Upload a CSV and map its columns to contact fields.</p></div>
+    <a href="{{ url_for('contacts_list') }}" class="btn-secondary" style="text-decoration:none;padding:.65rem 1rem;">← Contacts</a>
+  </div>
+  {% with messages = get_flashed_messages() %}
+  {% if messages %}<div style="padding:.85rem 1rem;border-radius:8px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);margin-bottom:1rem;">{{ messages[0] }}</div>{% endif %}
+  {% endwith %}
+  {% if not current_user.is_admin %}
+  <div style="padding:1rem;border-radius:10px;background:rgba(59,130,246,.08);margin-bottom:1.25rem;">
+    <strong>Quota usage:</strong> {{ used }} / {{ quota }} contacts.
+    {% if used >= quota %}<p style="margin:.5rem 0 0;">Your free quota is finished. Contact <a href="mailto:hello@brainyflavors.com">hello@brainyflavors.com</a> to request a higher quota.</p>
+    {% else %}<span>{{ quota-used }} remaining. Bulk import must fit within your remaining quota.</span>{% endif %}
+  </div>
+  {% else %}
+  <p style="padding:.8rem 1rem;background:rgba(16,185,129,.08);border-radius:8px;">Admin account: unlimited contact import.</p>
+  {% endif %}
+  {% if mapping_mode %}
+  <h2 style="font-size:1.2rem;">Step 2: Map CSV columns</h2>
+  <p class="subtitle">Found {{ row_count }} row(s). Choose the source column for each field. First Name, Last Name and Phone are required.</p>
+  <form method="POST">
+    <input type="hidden" name="mapping_submitted" value="1">
+    <textarea name="csv_data" hidden>{{ csv_data }}</textarea>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:1rem;">
+      {% for field,label in fields %}
+      <div><label for="map_{{ field }}">{{ label }}</label>
+        <select id="map_{{ field }}" name="map_{{ field }}" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid var(--border-color);">
+          <option value="">— Skip this field —</option>
+          {% for header in headers %}
+          <option value="{{ header }}" {% if (field == 'first_name' and header|lower in ['first name','firstname','first_name','given name']) or (field == 'last_name' and header|lower in ['last name','lastname','last_name','surname','family name']) or (field == 'phone' and header|lower in ['phone','phone number','telephone','tel']) or (field == 'email' and header|lower in ['email','email address']) or (field == 'company' and header|lower in ['company','organization','organisation']) or (field == 'job_title' and header|lower in ['job title','title','position']) or (field == 'mobile' and header|lower in ['mobile','mobile number']) or (field == 'address' and header|lower == 'address') or (field == 'website' and header|lower in ['website','url']) or (field == 'contact_type' and header|lower in ['contact type','type']) %}selected{% endif %}>{{ header }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endfor %}
+    </div>
+    <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-top:1.5rem;">
+      <button type="submit" class="btn-primary" style="width:auto;padding:.85rem 1.2rem;">Import Contacts</button>
+      <a href="{{ url_for('bulk_import') }}" class="btn-secondary" style="text-decoration:none;padding:.85rem 1.2rem;">Cancel</a>
+    </div>
+  </form>
+  {% else %}
+  <form method="POST" enctype="multipart/form-data" style="padding:1.5rem;border:1px dashed var(--border-color);border-radius:12px;">
+    <label for="csv_file">CSV file (maximum 2 MB)</label>
+    <input type="file" id="csv_file" name="csv_file" accept=".csv,text/csv" required>
+    <p class="subtitle">Use a header row. You can map columns on the next screen. Rows without First Name, Last Name or Phone will be skipped.</p>
+    <button type="submit" class="btn-primary" style="width:auto;padding:.85rem 1.2rem;">Upload and Map Columns →</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

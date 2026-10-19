@@ -1,5 +1,7 @@
 import sqlite3
+import csv
 import uuid
+from datetime import date, timedelta
 import os
 import io
 import re
@@ -158,6 +160,32 @@ def init_db():
             pass  # column already exists
 
     # Backfill owner for contacts created before ownership existed (first user = admin)
+    # Per-user contact quota; default free quota is 10.
+    if USE_POSTGRES:
+        conn.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_quota INTEGER NOT NULL DEFAULT 10')
+    else:
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN contact_quota INTEGER NOT NULL DEFAULT 10')
+        except sqlite3.OperationalError:
+            pass
+    if USE_POSTGRES:
+        conn.execute('''CREATE TABLE IF NOT EXISTS quota_audit (
+            id SERIAL PRIMARY KEY,
+            admin_user_id INTEGER NOT NULL,
+            target_user_id INTEGER NOT NULL,
+            old_quota INTEGER NOT NULL,
+            new_quota INTEGER NOT NULL,
+            changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+    else:
+        conn.execute('''CREATE TABLE IF NOT EXISTS quota_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            admin_user_id INTEGER NOT NULL,
+            target_user_id INTEGER NOT NULL,
+            old_quota INTEGER NOT NULL,
+            new_quota INTEGER NOT NULL,
+            changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
     conn.execute('UPDATE contacts SET user_id = (SELECT id FROM users ORDER BY id LIMIT 1) WHERE user_id IS NULL')
 
     conn.commit()
@@ -353,6 +381,98 @@ def user_contacts(user_id):
     
     return render_template('user_contacts.html', owner=owner, contacts=contacts, total=total)
 
+@app.route('/quota-usage')
+@login_required
+def quota_usage():
+    conn = get_db_connection()
+    today = date.today()
+    start_day = today - timedelta(days=29)
+    start_stamp = start_day.isoformat()
+    end_stamp = (today + timedelta(days=1)).isoformat()
+    if current_user.is_admin:
+        users = conn.execute('''
+            SELECT u.id, u.username, u.is_admin, u.contact_quota, u.created_at,
+                   COUNT(c.id) AS total_contacts
+            FROM users u LEFT JOIN contacts c ON c.user_id = u.id
+            GROUP BY u.id ORDER BY total_contacts DESC, u.username
+        ''').fetchall()
+        contact_rows = conn.execute('SELECT user_id, created_at FROM contacts WHERE created_at >= ? AND created_at < ?',
+                                    (start_stamp, end_stamp)).fetchall()
+        audit_rows = conn.execute('''
+            SELECT a.*, admin.username AS admin_username, target.username AS target_username
+            FROM quota_audit a
+            LEFT JOIN users admin ON admin.id = a.admin_user_id
+            LEFT JOIN users target ON target.id = a.target_user_id
+            ORDER BY a.changed_at DESC LIMIT 50
+        ''').fetchall()
+        quota_row = conn.execute('SELECT COALESCE(SUM(contact_quota), 0) AS total_quota FROM users WHERE is_admin = false').fetchone()
+        total_quota = int(quota_row['total_quota'] or 0)
+    else:
+        users = conn.execute('''
+            SELECT u.id, u.username, u.is_admin, u.contact_quota, u.created_at,
+                   COUNT(c.id) AS total_contacts
+            FROM users u LEFT JOIN contacts c ON c.user_id = u.id
+            WHERE u.id = ? GROUP BY u.id
+        ''', (current_user.id,)).fetchall()
+        contact_rows = conn.execute('SELECT user_id, created_at FROM contacts WHERE user_id = ? AND created_at >= ? AND created_at < ?',
+                                    (current_user.id, start_stamp, end_stamp)).fetchall()
+        audit_rows = []
+        total_quota = 0
+    conn.close()
+
+    daily_counts = { (start_day + timedelta(days=i)).isoformat(): 0 for i in range(30) }
+    for row in contact_rows:
+        stamp = str(row['created_at'] or '')[:10]
+        if stamp in daily_counts:
+            daily_counts[stamp] += 1
+    chart_max = max(daily_counts.values()) if daily_counts else 0
+    chart = [{'day': key, 'count': value, 'height': max(4, round(value * 100 / chart_max)) if chart_max else 4}
+             for key, value in daily_counts.items()]
+    user_stats = []
+    for user in users:
+        total = int(user['total_contacts'] or 0)
+        is_admin = bool(user['is_admin'])
+        quota = None if is_admin else int(user['contact_quota'] if user['contact_quota'] is not None else 10)
+        user_stats.append({
+            'id': user['id'], 'username': user['username'], 'is_admin': is_admin,
+            'total': total, 'quota': quota,
+            'remaining': None if is_admin else max(0, quota-total),
+            'percent': 100 if is_admin else (min(100, round(total*100/quota)) if quota else (100 if total else 0)),
+            'created_at': user['created_at']
+        })
+    total_contacts = sum(item['total'] for item in user_stats)
+    total_users = len(user_stats)
+    return render_template('quota_usage.html', is_admin=current_user.is_admin, user_stats=user_stats,
+                           chart=chart, total_contacts=total_contacts, total_users=total_users,
+                           total_quota=total_quota, audit_rows=audit_rows, today=today.isoformat(),
+                           start_day=start_day.isoformat())
+
+@app.route('/users/<int:user_id>/quota', methods=['POST'])
+@login_required
+def update_user_quota(user_id):
+    if not current_user.is_admin:
+        abort(403)
+    try:
+        quota = int(request.form.get('contact_quota', '10'))
+        if quota < 0 or quota > 1000000:
+            raise ValueError()
+    except ValueError:
+        flash('Quota must be a number between 0 and 1,000,000.')
+        return redirect(url_for('users_list'))
+    conn = get_db_connection()
+    target = conn.execute('SELECT contact_quota FROM users WHERE id = ?', (user_id,)).fetchone()
+    if not target:
+        conn.close()
+        abort(404)
+    old_quota = int(target['contact_quota'] if target['contact_quota'] is not None else 10)
+    conn.execute('UPDATE users SET contact_quota = ? WHERE id = ?', (quota, user_id))
+    conn.execute('INSERT INTO quota_audit (admin_user_id, target_user_id, old_quota, new_quota) VALUES (?, ?, ?, ?)',
+                 (current_user.id, user_id, old_quota, quota))
+    conn.commit()
+    conn.close()
+    flash('Contact quota updated.')
+    return redirect(url_for('users_list'))
+
 @app.route('/users/reset-password/<int:user_id>', methods=['POST'])
 @login_required
 def reset_user_password(user_id):
@@ -426,9 +546,19 @@ def delete_user(user_id):
     return redirect(url_for('users_list'))
 
 @app.route('/', methods=['GET'])
-@login_required
 def index():
+    # Public landing page makes every shared contact link a way back to the app.
+    if not current_user.is_authenticated:
+        return render_template('home.html')
     return render_template('index.html')
+
+def get_contact_usage(conn, user_id):
+    return conn.execute('SELECT COUNT(*) AS total FROM contacts WHERE user_id = ?', (user_id,)).fetchone()['total']
+
+def quota_remaining(conn, user_id):
+    row = conn.execute('SELECT contact_quota FROM users WHERE id = ?', (user_id,)).fetchone()
+    quota = int(row['contact_quota'] if row and row['contact_quota'] is not None else 10)
+    return max(0, quota - get_contact_usage(conn, user_id))
 
 
 
@@ -475,11 +605,16 @@ def contacts_list():
     if current_user.is_admin:
         users = conn.execute('SELECT id, username FROM users ORDER BY username').fetchall()
 
+    own_total = get_contact_usage(conn, current_user.id) if not current_user.is_admin else None
+    own_quota_row = conn.execute('SELECT contact_quota FROM users WHERE id = ?', (current_user.id,)).fetchone()
+    own_quota = int(own_quota_row['contact_quota'] if own_quota_row and own_quota_row['contact_quota'] is not None else 10)
     conn.close()
 
     total_pages = (total + per_page - 1) // per_page
 
     return render_template('contacts.html',
+                         own_total=own_total,
+                         own_quota=own_quota,
                          contacts=contacts,
                          page=page,
                          total_pages=total_pages,
@@ -488,6 +623,93 @@ def contacts_list():
                          user_filter=user_filter)
 
 
+
+@app.route('/bulk-import', methods=['GET', 'POST'])
+@login_required
+def bulk_import():
+    fields = [
+        ('first_name', 'First Name (required)'), ('last_name', 'Last Name (required)'),
+        ('phone', 'Phone (required)'), ('mobile', 'Mobile'), ('email', 'Email'),
+        ('company', 'Company'), ('job_title', 'Job Title'), ('address', 'Address'),
+        ('website', 'Website'), ('contact_type', 'Contact Type')
+    ]
+    if request.method == 'GET':
+        conn = get_db_connection()
+        used = get_contact_usage(conn, current_user.id)
+        user_row = conn.execute('SELECT contact_quota FROM users WHERE id = ?', (current_user.id,)).fetchone()
+        quota = int(user_row['contact_quota'] if user_row and user_row['contact_quota'] is not None else 10)
+        conn.close()
+        return render_template('bulk_import.html', fields=fields, used=used, quota=quota)
+
+    csv_data = request.form.get('csv_data', '')
+    mapping_submitted = request.form.get('mapping_submitted') == '1'
+    if not mapping_submitted:
+        upload = request.files.get('csv_file')
+        if not upload or not upload.filename.lower().endswith('.csv'):
+            flash('Please choose a CSV file.')
+            return redirect(url_for('bulk_import'))
+        raw = upload.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
+            flash('CSV file is too large. Maximum file size is 2 MB.')
+            return redirect(url_for('bulk_import'))
+        try:
+            csv_data = raw.decode('utf-8-sig')
+            reader = csv.DictReader(io.StringIO(csv_data))
+            headers = reader.fieldnames or []
+            rows = list(reader)
+        except (UnicodeDecodeError, csv.Error):
+            flash('Could not read this CSV. Save it as UTF-8 CSV and try again.')
+            return redirect(url_for('bulk_import'))
+        if not headers or not rows:
+            flash('The CSV file has no headers or no contact rows.')
+            return redirect(url_for('bulk_import'))
+        conn = get_db_connection()
+        used = get_contact_usage(conn, current_user.id)
+        user_row = conn.execute('SELECT contact_quota FROM users WHERE id = ?', (current_user.id,)).fetchone()
+        quota = int(user_row['contact_quota'] if user_row and user_row['contact_quota'] is not None else 10)
+        conn.close()
+        return render_template('bulk_import.html', fields=fields, headers=headers, csv_data=csv_data,
+                               row_count=len(rows), mapping_mode=True, used=used, quota=quota)
+
+    try:
+        reader = csv.DictReader(io.StringIO(csv_data))
+        rows = list(reader)
+        headers = reader.fieldnames or []
+    except csv.Error:
+        flash('Invalid CSV data. Please upload the file again.')
+        return redirect(url_for('bulk_import'))
+    mapping = {key: request.form.get('map_' + key, '') for key, _ in fields}
+    if not all(mapping.get(key) for key in ('first_name', 'last_name', 'phone')):
+        flash('Map First Name, Last Name and Phone before importing.')
+        return redirect(url_for('bulk_import'))
+    conn = get_db_connection()
+    remaining = quota_remaining(conn, current_user.id)
+    valid_rows = [row for row in rows if (row.get(mapping['first_name']) or '').strip()
+                  and (row.get(mapping['last_name']) or '').strip() and (row.get(mapping['phone']) or '').strip()]
+    if not current_user.is_admin and len(valid_rows) > remaining:
+        conn.close()
+        flash(f'Not enough quota for this upload. You can add {remaining} more contact(s). Contact hello@brainyflavors.com to request a higher quota.')
+        return redirect(url_for('bulk_import'))
+    imported = 0
+    try:
+        for row in valid_rows:
+            values = {field: ((row.get(mapping.get(field, '')) or '').strip() if mapping.get(field) else '') for field, _ in fields}
+            unique_id = uuid.uuid4().hex[:10]
+            conn.execute('''INSERT INTO contacts
+                (id, first_name, last_name, phone, email, company, job_title, address, website, contact_type, mobile, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (unique_id, values['first_name'], values['last_name'], values['phone'], values['email'] or None,
+                 values['company'] or None, values['job_title'] or None, values['address'] or None,
+                 values['website'] or None, values['contact_type'] or 'Personal', values['mobile'] or None, current_user.id))
+            imported += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    flash(f'Successfully imported {imported} contact(s). Rows missing required fields were skipped.')
+    return redirect(url_for('contacts_list'))
 
 @app.route('/fetch-image')
 @login_required
@@ -515,6 +737,12 @@ def fetch_image():
 @app.route('/create', methods=['POST'])
 @login_required
 def create_contact():
+    conn = get_db_connection()
+    if not current_user.is_admin and quota_remaining(conn, current_user.id) <= 0:
+        conn.close()
+        flash('Your free contact quota is finished. Contact hello@brainyflavors.com to request a higher quota.')
+        return redirect(url_for('contacts_list'))
+    conn.close()
     first_name = request.form.get('first_name')
     last_name = request.form.get('last_name')
     phone = request.form.get('phone')
@@ -922,11 +1150,12 @@ def qr_code(unique_id):
     img.save(img_io, 'PNG')
     img_io.seek(0)
     
+    disposition = 'attachment' if request.args.get('download') == '1' else 'inline'
     return Response(
         img_io.getvalue(),
         mimetype='image/png',
         headers={
-            'Content-Disposition': f'inline; filename="contact_qr_{unique_id}.png"',
+            'Content-Disposition': f'{disposition}; filename="contact_qr_{unique_id}.png"',
             'Cache-Control': 'no-store, no-cache, must-revalidate'
         }
     )
