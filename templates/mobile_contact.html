@@ -21,6 +21,8 @@
             box-sizing: border-box;
         }
 
+        .app-shortcuts { position:fixed; top:0; left:0; right:0; z-index:1000; display:flex; justify-content:center; gap:.65rem; flex-wrap:wrap; padding:.7rem; background:rgba(255,255,255,.96); border-bottom:1px solid #e2e8f0; box-shadow:0 2px 10px rgba(15,23,42,.06); }
+        .app-shortcuts a { color:#1d4ed8; text-decoration:none; font-size:.85rem; font-weight:700; padding:.45rem .7rem; border-radius:8px; background:#eff6ff; }
         body {
             font-family: 'Outfit', sans-serif;
             background-color: var(--bg);
@@ -30,7 +32,7 @@
             justify-content: center;
             align-items: center;
             min-height: 100vh;
-            padding: 20px;
+            padding: 76px 20px 20px;
             box-sizing: border-box;
         }
 
@@ -178,6 +180,7 @@
 </head>
 
 <body>
+    <nav class="app-shortcuts" aria-label="Application shortcuts"><a href="/">🏠 Home / Register</a><a href="/signup">Create Account</a><a href="/login">Login</a></nav>
 
     <div class="card">
         <div class="profile-container">
