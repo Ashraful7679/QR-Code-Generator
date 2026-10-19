@@ -168,14 +168,24 @@ def init_db():
             conn.execute('ALTER TABLE users ADD COLUMN contact_quota INTEGER NOT NULL DEFAULT 10')
         except sqlite3.OperationalError:
             pass
-    conn.execute('''CREATE TABLE IF NOT EXISTS quota_audit (
-        id INTEGER PRIMARY KEY,
-        admin_user_id INTEGER NOT NULL,
-        target_user_id INTEGER NOT NULL,
-        old_quota INTEGER NOT NULL,
-        new_quota INTEGER NOT NULL,
-        changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )''')
+    if USE_POSTGRES:
+        conn.execute('''CREATE TABLE IF NOT EXISTS quota_audit (
+            id SERIAL PRIMARY KEY,
+            admin_user_id INTEGER NOT NULL,
+            target_user_id INTEGER NOT NULL,
+            old_quota INTEGER NOT NULL,
+            new_quota INTEGER NOT NULL,
+            changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+    else:
+        conn.execute('''CREATE TABLE IF NOT EXISTS quota_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            admin_user_id INTEGER NOT NULL,
+            target_user_id INTEGER NOT NULL,
+            old_quota INTEGER NOT NULL,
+            new_quota INTEGER NOT NULL,
+            changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
     conn.execute('UPDATE contacts SET user_id = (SELECT id FROM users ORDER BY id LIMIT 1) WHERE user_id IS NULL')
 
     conn.commit()
