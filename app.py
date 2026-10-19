@@ -362,6 +362,25 @@ def user_contacts(user_id):
     
     return render_template('user_contacts.html', owner=owner, contacts=contacts, total=total)
 
+@app.route('/users/<int:user_id>/quota', methods=['POST'])
+@login_required
+def update_user_quota(user_id):
+    if not current_user.is_admin:
+        abort(403)
+    try:
+        quota = int(request.form.get('contact_quota', '10'))
+        if quota < 0 or quota > 1000000:
+            raise ValueError()
+    except ValueError:
+        flash('Quota must be a number between 0 and 1,000,000.')
+        return redirect(url_for('users_list'))
+    conn = get_db_connection()
+    result = conn.execute('UPDATE users SET contact_quota = ? WHERE id = ?', (quota, user_id))
+    conn.commit()
+    conn.close()
+    flash('Contact quota updated.')
+    return redirect(url_for('users_list'))
+
 @app.route('/users/reset-password/<int:user_id>', methods=['POST'])
 @login_required
 def reset_user_password(user_id):
