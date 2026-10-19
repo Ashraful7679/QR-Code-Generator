@@ -241,6 +241,26 @@
         <a href="{{ url_for('download_vcard_fallback', unique_id=contact.id) }}" class="btn-add">
             Save Contact
         </a>
+
+        <section class="share-qr" aria-label="Contact link QR code">
+            <h2>Scan to Open This Contact</h2>
+            <p>Scan this QR code to open this contact page and save the details.</p>
+            <div class="qr-frame">
+                <img src="{{ url_for('qr_code', unique_id=contact.id) }}" alt="QR code for this contact link" width="200" height="200">
+            </div>
+            <a class="qr-download" href="{{ url_for('qr_code', unique_id=contact.id, download=1) }}">Download QR Code (PNG)</a>
+            <p class="share-url">{{ contact_url }}</p>
+        </section>
+
+        <style>
+            .share-qr { margin-top: 1.75rem; padding-top: 1.5rem; border-top: 1px solid #e2e8f0; }
+            .share-qr h2 { margin: 0 0 .5rem; font-size: 1.1rem; }
+            .share-qr p { color: var(--text-muted); font-size: .88rem; line-height: 1.5; }
+            .qr-frame { display: inline-block; padding: .75rem; background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; }
+            .qr-frame img { display: block; width: 200px; height: 200px; max-width: 100%; }
+            .qr-download { display: block; margin-top: .9rem; padding: .8rem; border-radius: 12px; background: #eff6ff; color: #1d4ed8; font-weight: 700; text-decoration: none; }
+            .share-url { overflow-wrap: anywhere; font-family: monospace; }
+        </style>
     </div>
 
 </body>
