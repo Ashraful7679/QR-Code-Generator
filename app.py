@@ -1,6 +1,7 @@
 import sqlite3
 import csv
 import uuid
+from datetime import date, timedelta
 import os
 import io
 import re
@@ -167,6 +168,14 @@ def init_db():
             conn.execute('ALTER TABLE users ADD COLUMN contact_quota INTEGER NOT NULL DEFAULT 10')
         except sqlite3.OperationalError:
             pass
+    conn.execute('''CREATE TABLE IF NOT EXISTS quota_audit (
+        id INTEGER PRIMARY KEY,
+        admin_user_id INTEGER NOT NULL,
+        target_user_id INTEGER NOT NULL,
+        old_quota INTEGER NOT NULL,
+        new_quota INTEGER NOT NULL,
+        changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
     conn.execute('UPDATE contacts SET user_id = (SELECT id FROM users ORDER BY id LIMIT 1) WHERE user_id IS NULL')
 
     conn.commit()
@@ -362,6 +371,72 @@ def user_contacts(user_id):
     
     return render_template('user_contacts.html', owner=owner, contacts=contacts, total=total)
 
+@app.route('/quota-usage')
+@login_required
+def quota_usage():
+    conn = get_db_connection()
+    today = date.today()
+    start_day = today - timedelta(days=29)
+    start_stamp = start_day.isoformat()
+    end_stamp = (today + timedelta(days=1)).isoformat()
+    if current_user.is_admin:
+        users = conn.execute('''
+            SELECT u.id, u.username, u.is_admin, u.contact_quota, u.created_at,
+                   COUNT(c.id) AS total_contacts
+            FROM users u LEFT JOIN contacts c ON c.user_id = u.id
+            GROUP BY u.id ORDER BY total_contacts DESC, u.username
+        ''').fetchall()
+        contact_rows = conn.execute('SELECT user_id, created_at FROM contacts WHERE created_at >= ? AND created_at < ?',
+                                    (start_stamp, end_stamp)).fetchall()
+        audit_rows = conn.execute('''
+            SELECT a.*, admin.username AS admin_username, target.username AS target_username
+            FROM quota_audit a
+            LEFT JOIN users admin ON admin.id = a.admin_user_id
+            LEFT JOIN users target ON target.id = a.target_user_id
+            ORDER BY a.changed_at DESC LIMIT 50
+        ''').fetchall()
+        quota_row = conn.execute('SELECT COALESCE(SUM(contact_quota), 0) AS total_quota FROM users WHERE is_admin = false').fetchone()
+        total_quota = int(quota_row['total_quota'] or 0)
+    else:
+        users = conn.execute('''
+            SELECT u.id, u.username, u.is_admin, u.contact_quota, u.created_at,
+                   COUNT(c.id) AS total_contacts
+            FROM users u LEFT JOIN contacts c ON c.user_id = u.id
+            WHERE u.id = ? GROUP BY u.id
+        ''', (current_user.id,)).fetchall()
+        contact_rows = conn.execute('SELECT user_id, created_at FROM contacts WHERE user_id = ? AND created_at >= ? AND created_at < ?',
+                                    (current_user.id, start_stamp, end_stamp)).fetchall()
+        audit_rows = []
+        total_quota = 0
+    conn.close()
+
+    daily_counts = { (start_day + timedelta(days=i)).isoformat(): 0 for i in range(30) }
+    for row in contact_rows:
+        stamp = str(row['created_at'] or '')[:10]
+        if stamp in daily_counts:
+            daily_counts[stamp] += 1
+    chart_max = max(daily_counts.values()) if daily_counts else 0
+    chart = [{'day': key, 'count': value, 'height': max(4, round(value * 100 / chart_max)) if chart_max else 4}
+             for key, value in daily_counts.items()]
+    user_stats = []
+    for user in users:
+        total = int(user['total_contacts'] or 0)
+        is_admin = bool(user['is_admin'])
+        quota = None if is_admin else int(user['contact_quota'] if user['contact_quota'] is not None else 10)
+        user_stats.append({
+            'id': user['id'], 'username': user['username'], 'is_admin': is_admin,
+            'total': total, 'quota': quota,
+            'remaining': None if is_admin else max(0, quota-total),
+            'percent': 100 if is_admin else (min(100, round(total*100/quota)) if quota else (100 if total else 0)),
+            'created_at': user['created_at']
+        })
+    total_contacts = sum(item['total'] for item in user_stats)
+    total_users = len(user_stats)
+    return render_template('quota_usage.html', is_admin=current_user.is_admin, user_stats=user_stats,
+                           chart=chart, total_contacts=total_contacts, total_users=total_users,
+                           total_quota=total_quota, audit_rows=audit_rows, today=today.isoformat(),
+                           start_day=start_day.isoformat())
+
 @app.route('/users/<int:user_id>/quota', methods=['POST'])
 @login_required
 def update_user_quota(user_id):
@@ -375,7 +450,14 @@ def update_user_quota(user_id):
         flash('Quota must be a number between 0 and 1,000,000.')
         return redirect(url_for('users_list'))
     conn = get_db_connection()
-    result = conn.execute('UPDATE users SET contact_quota = ? WHERE id = ?', (quota, user_id))
+    target = conn.execute('SELECT contact_quota FROM users WHERE id = ?', (user_id,)).fetchone()
+    if not target:
+        conn.close()
+        abort(404)
+    old_quota = int(target['contact_quota'] if target['contact_quota'] is not None else 10)
+    conn.execute('UPDATE users SET contact_quota = ? WHERE id = ?', (quota, user_id))
+    conn.execute('INSERT INTO quota_audit (admin_user_id, target_user_id, old_quota, new_quota) VALUES (?, ?, ?, ?)',
+                 (current_user.id, user_id, old_quota, quota))
     conn.commit()
     conn.close()
     flash('Contact quota updated.')
